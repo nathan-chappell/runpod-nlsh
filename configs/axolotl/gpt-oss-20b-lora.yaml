@@ -1,0 +1,76 @@
+base_model: openai/gpt-oss-20b
+model_type: GptOssForCausalLM
+tokenizer_type: AutoTokenizer
+
+chat_template: openai_harmony
+adapter: lora
+load_in_4bit: false
+strict: false
+
+datasets:
+  - path: data/train.messages.jsonl
+    ds_type: json
+    type: chat_template
+    field_messages: messages
+    message_property_mappings:
+      role: role
+      content: content
+    roles:
+      user:
+        - user
+      assistant:
+        - assistant
+      system:
+        - developer
+        - system
+    roles_to_train:
+      - assistant
+    train_on_eos: turn
+
+val_datasets:
+  - path: data/dev.messages.jsonl
+    ds_type: json
+    type: chat_template
+    field_messages: messages
+    message_property_mappings:
+      role: role
+      content: content
+    roles:
+      user:
+        - user
+      assistant:
+        - assistant
+      system:
+        - developer
+        - system
+    roles_to_train:
+      - assistant
+    train_on_eos: turn
+
+sequence_len: 4096
+sample_packing: false
+pad_to_sequence_len: true
+
+micro_batch_size: 1
+gradient_accumulation_steps: 16
+num_epochs: 3
+learning_rate: 2.0e-4
+lr_scheduler: cosine
+warmup_ratio: 0.03
+bf16: true
+gradient_checkpointing: true
+
+lora_r: 8
+lora_alpha: 16
+lora_dropout: 0.05
+target_modules: all-linear
+target_parameters:
+  - 7.mlp.experts.gate_up_proj
+  - 7.mlp.experts.down_proj
+  - 15.mlp.experts.gate_up_proj
+  - 15.mlp.experts.down_proj
+  - 23.mlp.experts.gate_up_proj
+  - 23.mlp.experts.down_proj
+
+output_dir: outputs/gpt-oss-20b-nlsh-lora
+

@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.env
+*.pyc
+*.pyo
+*.egg-info/
+artifacts/
+tmp/
+.codex
+hf_test_result.txt
