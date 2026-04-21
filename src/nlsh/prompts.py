@@ -15,10 +15,12 @@ Rules:
 - If required information is missing, set needs_confirmation=true and add one or more questions.
 - questions[].field_path must point at the missing field, such as steps[0].input_file.
 - Use find_files with roots, extension, name_pattern, path_contains, max_depth, and file_type.
+- For a pure find_files plan that only searches for files and does not write output, set risk_level to low.
 - For "under ./dir" or "in ./dir", put that path in roots.
 - For "every pdf" or "pdf files", prefer extension=".pdf" instead of a catch-all pattern.
 - For phrases like "no deeper than two levels", set max_depth to 2.
 - Do not use "*" unless the user truly asked for every file regardless of type.
+- When the user directly specifies a file type or depth, copy that into the matching field instead of leaving it null.
 - Prefer concise notes. Use an empty list when no note is needed.
 - Keep risk_level honest. Anything that writes files should usually be medium unless it is especially risky.
 """.strip()
