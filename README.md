@@ -4,7 +4,7 @@
 
 ## What Is In Here
 
-- A typed `PlanV1` schema for short execution plans
+- A typed schema for either a short execution plan or one clarifying question
 - A compiler that turns plans into safe bash scripts
 - A runner with clarification and confirmation gates
 - A shell runtime built on `find`, `qpdf`, and `jq`
@@ -24,7 +24,17 @@
 - `json_sort`
 - `json_group_count`
 
-`PlanV1` allows up to three linear steps. `find_files` is optional, but when used it must be first. CSV analysis should flow through `csv_to_json` and then one JSON transform.
+Planner output is one of two shapes:
+
+```json
+{"kind": "clarification", "question": "Which PDF files should I merge?"}
+```
+
+```json
+{"kind": "plan", "steps": [{"kind": "find_files", "root": "./contracts", "glob": "*.pdf", "max_depth": null}]}
+```
+
+Plans allow up to three linear steps. `find_files` is optional, but when used it must be first. CSV analysis should flow through `csv_to_json` and then one JSON transform.
 
 ## Setup
 
@@ -54,7 +64,13 @@ export NLSH_BASE_URL=https://api.runpod.ai/v2/ENDPOINT_ID/openai/v1
 export NLSH_MODEL=microsoft/Phi-4-mini-instruct
 ```
 
-`hf_test.py` uses the same planner environment and writes dev-set results to `artifacts/hf_test_result.txt`.
+Run the configured Runpod endpoint against the dev messages:
+
+```bash
+./.venv/bin/python scripts/runpod_dev_eval.py --timeout 30
+```
+
+The script writes a readable log to `artifacts/runpod_dev_eval.txt` and a structured report to `artifacts/runpod_dev_eval.json`.
 
 ## CLI
 
@@ -96,6 +112,8 @@ Each row includes:
 - `tags`
 - `messages`
 - `plan`
+
+For now, the active prompt-iteration set is `data/dev.messages.jsonl`, with 20 examples.
 
 The Axolotl starter config is at `configs/axolotl/phi-4-mini-instruct-lora.yaml`. It is intentionally small and meant for a demo LoRA run after the prompting and eval examples feel stable.
 

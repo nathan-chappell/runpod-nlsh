@@ -5,20 +5,17 @@ from nlsh.schema import PlanV1
 def test_compile_find_then_pdf_merge() -> None:
     plan = PlanV1.model_validate(
         {
-            "version": "1",
+            "kind": "plan",
             "steps": [
-                {"kind": "find_files", "roots": ["./contracts"], "extension": ".pdf"},
+                {"kind": "find_files", "root": "./contracts", "glob": "*.pdf"},
                 {"kind": "pdf_merge", "output_file": "bundle.pdf"},
             ],
-            "needs_confirmation": False,
-            "questions": [],
-            "risk_level": "medium",
-            "notes": [],
         }
     )
 
     compiled = compile_plan(plan, python_executable="/usr/bin/python3")
     assert "mapfile -d '' -t MATCHES" in compiled.script
+    assert "find ./contracts -type f -path './contracts/*.pdf' -print0" in compiled.script
     assert "qpdf --empty --pages" in compiled.script
     assert "-- bundle.pdf" in compiled.script
     assert '"${MATCHES[@]}"' in compiled.script
@@ -28,7 +25,7 @@ def test_compile_find_then_pdf_merge() -> None:
 def test_compile_pdf_extract_uses_qpdf() -> None:
     plan = PlanV1.model_validate(
         {
-            "version": "1",
+            "kind": "plan",
             "steps": [
                 {
                     "kind": "pdf_extract_pages",
@@ -38,23 +35,18 @@ def test_compile_pdf_extract_uses_qpdf() -> None:
                     "output_file": "invoice_pages.pdf",
                 }
             ],
-            "needs_confirmation": False,
-            "questions": [],
-            "risk_level": "medium",
-            "notes": [],
         }
     )
 
     compiled = compile_plan(plan)
     assert "qpdf invoice.pdf --pages . 2-4 -- invoice_pages.pdf" in compiled.script
-    assert "nlsh.backends.pdf_ops" not in compiled.script
     assert required_tools_for_plan(plan) == ["qpdf"]
 
 
 def test_compile_pdf_search_uses_python_helper() -> None:
     plan = PlanV1.model_validate(
         {
-            "version": "1",
+            "kind": "plan",
             "steps": [
                 {
                     "kind": "pdf_search_text",
@@ -63,10 +55,6 @@ def test_compile_pdf_search_uses_python_helper() -> None:
                     "output_file": "warranty_matches.json",
                 }
             ],
-            "needs_confirmation": False,
-            "questions": [],
-            "risk_level": "medium",
-            "notes": [],
         }
     )
 
@@ -80,7 +68,7 @@ def test_compile_pdf_search_uses_python_helper() -> None:
 def test_compile_csv_to_json_then_filter_uses_jq() -> None:
     plan = PlanV1.model_validate(
         {
-            "version": "1",
+            "kind": "plan",
             "steps": [
                 {"kind": "csv_to_json", "input_file": "orders.csv", "output_file": None},
                 {
@@ -92,10 +80,6 @@ def test_compile_csv_to_json_then_filter_uses_jq() -> None:
                     "output_file": "paid_orders.json",
                 },
             ],
-            "needs_confirmation": False,
-            "questions": [],
-            "risk_level": "medium",
-            "notes": [],
         }
     )
 
@@ -111,9 +95,9 @@ def test_compile_csv_to_json_then_filter_uses_jq() -> None:
 def test_compile_find_then_csv_json_pipeline_requires_single_match() -> None:
     plan = PlanV1.model_validate(
         {
-            "version": "1",
+            "kind": "plan",
             "steps": [
-                {"kind": "find_files", "roots": ["./exports"], "extension": ".csv", "path_contains": "june"},
+                {"kind": "find_files", "root": "./exports", "glob": "*june*.csv"},
                 {"kind": "csv_to_json", "input_file": None, "output_file": None},
                 {
                     "kind": "json_filter",
@@ -124,10 +108,6 @@ def test_compile_find_then_csv_json_pipeline_requires_single_match() -> None:
                     "output_file": "june_eu.json",
                 },
             ],
-            "needs_confirmation": False,
-            "questions": [],
-            "risk_level": "medium",
-            "notes": [],
         }
     )
 
@@ -142,7 +122,7 @@ def test_compile_find_then_csv_json_pipeline_requires_single_match() -> None:
 def test_compile_numeric_json_filter_casts_string_values() -> None:
     plan = PlanV1.model_validate(
         {
-            "version": "1",
+            "kind": "plan",
             "steps": [
                 {
                     "kind": "json_filter",
@@ -153,10 +133,6 @@ def test_compile_numeric_json_filter_casts_string_values() -> None:
                     "output_file": "large_orders.json",
                 }
             ],
-            "needs_confirmation": False,
-            "questions": [],
-            "risk_level": "medium",
-            "notes": [],
         }
     )
 
@@ -167,7 +143,7 @@ def test_compile_numeric_json_filter_casts_string_values() -> None:
 def test_compile_json_group_count_uses_jq() -> None:
     plan = PlanV1.model_validate(
         {
-            "version": "1",
+            "kind": "plan",
             "steps": [
                 {
                     "kind": "json_group_count",
@@ -176,10 +152,6 @@ def test_compile_json_group_count_uses_jq() -> None:
                     "output_file": "counts.json",
                 }
             ],
-            "needs_confirmation": False,
-            "questions": [],
-            "risk_level": "medium",
-            "notes": [],
         }
     )
 

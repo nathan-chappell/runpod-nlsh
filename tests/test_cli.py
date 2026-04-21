@@ -2,21 +2,21 @@ import argparse
 
 from nlsh.cli import command_run
 from nlsh.preflight import MissingToolsError
-from nlsh.schema import PlanV1
+from nlsh.schema import PlannerOutput, PlanV1
 
 
 class StubPlanner:
-    def __init__(self, plan: PlanV1) -> None:
+    def __init__(self, plan: PlannerOutput) -> None:
         self._plan = plan
 
-    def plan(self, prompt: str) -> PlanV1:
+    def plan(self, prompt: str) -> PlannerOutput:
         return self._plan
 
 
 def test_command_run_returns_2_when_required_tool_is_missing(monkeypatch) -> None:
     plan = PlanV1.model_validate(
         {
-            "version": "1",
+            "kind": "plan",
             "steps": [
                 {
                     "kind": "json_filter",
@@ -27,10 +27,6 @@ def test_command_run_returns_2_when_required_tool_is_missing(monkeypatch) -> Non
                     "output_file": "paid_orders.json",
                 }
             ],
-            "needs_confirmation": False,
-            "questions": [],
-            "risk_level": "medium",
-            "notes": [],
         }
     )
 

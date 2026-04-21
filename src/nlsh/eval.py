@@ -9,14 +9,14 @@ from typing import Any
 from nlsh.compiler import CompileError, compile_plan
 from nlsh.dataio import default_split_path, ensure_parent, load_jsonl
 from nlsh.planner import Planner
-from nlsh.schema import PlanV1
+from nlsh.schema import PlanV1, PlannerOutput, normalize_plan, validate_plan_payload
 
 
 @dataclass(slots=True)
 class EvalItem:
     prompt: str
-    expected: PlanV1
-    predicted: PlanV1
+    expected: PlannerOutput
+    predicted: PlannerOutput
     exact_match: bool
     compile_valid: bool
     compile_error: str | None
@@ -55,19 +55,21 @@ def evaluate_planner(
     correct_slots = 0
 
     for record in raw_records:
-        expected = PlanV1.model_validate(record["plan"])
+        expected = validate_plan_payload(record["plan"])
         predicted = planner.plan(record["prompt"])
-        exact_match = expected.model_dump(mode="json") == predicted.model_dump(mode="json")
+        expected_dump = normalize_plan(expected)
+        predicted_dump = normalize_plan(predicted)
+        exact_match = expected_dump == predicted_dump
 
-        expected_slots = _flatten(expected.model_dump(mode="json"))
-        predicted_slots = _flatten(predicted.model_dump(mode="json"))
+        expected_slots = _flatten(expected_dump)
+        predicted_slots = _flatten(predicted_dump)
         slot_keys = set(expected_slots) | set(predicted_slots)
         total_slots += len(slot_keys)
         correct_slots += sum(1 for key in slot_keys if expected_slots.get(key) == predicted_slots.get(key))
 
         compile_valid = True
         compile_error: str | None = None
-        if not predicted.needs_confirmation:
+        if isinstance(predicted, PlanV1):
             try:
                 compile_plan(predicted, python_executable=python_executable)
             except CompileError as exc:
@@ -98,8 +100,8 @@ def evaluate_planner(
                 "exact_match": item.exact_match,
                 "compile_valid": item.compile_valid,
                 "compile_error": item.compile_error,
-                "expected": item.expected.model_dump(mode="json", exclude_none=False),
-                "predicted": item.predicted.model_dump(mode="json", exclude_none=False),
+                "expected": normalize_plan(item.expected),
+                "predicted": normalize_plan(item.predicted),
             }
             for item in items
         ],

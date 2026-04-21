@@ -11,7 +11,7 @@ from nlsh.eval import evaluate_planner, write_eval_artifact
 from nlsh.planner import load_planner, plan_to_pretty_json
 from nlsh.preflight import MissingToolsError, ensure_required_tools
 from nlsh.runner import confirm_execution, prepare_plan_for_execution, print_compile_preview, run_compiled_script
-from nlsh.schema import PlanV1
+from nlsh.schema import Clarification, PlanV1, validate_plan_payload
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -44,10 +44,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def command_plan(args: argparse.Namespace) -> int:
     planner = load_planner(args.planner, dataset_path=args.dataset)
-    plan = planner.plan(args.prompt)
-    print(plan_to_pretty_json(plan))
+    output = planner.plan(args.prompt)
+    print(plan_to_pretty_json(output))
+    if isinstance(output, Clarification):
+        return 0
     try:
-        compiled = compile_plan(plan, python_executable=sys.executable)
+        compiled = compile_plan(output, python_executable=sys.executable)
     except CompileError:
         return 0
     print()
@@ -58,8 +60,11 @@ def command_plan(args: argparse.Namespace) -> int:
 
 def command_run(args: argparse.Namespace) -> int:
     planner = load_planner(args.planner, dataset_path=args.dataset)
-    plan = planner.plan(args.prompt)
-    plan, compiled = prepare_plan_for_execution(plan, python_executable=sys.executable)
+    output = planner.plan(args.prompt)
+    if isinstance(output, Clarification):
+        print(output.question)
+        return 1
+    plan, compiled = prepare_plan_for_execution(output, python_executable=sys.executable)
     try:
         ensure_required_tools(required_tools_for_plan(plan))
     except MissingToolsError as exc:
@@ -74,7 +79,10 @@ def command_run(args: argparse.Namespace) -> int:
 
 def command_compile(args: argparse.Namespace) -> int:
     payload = json.loads(args.plan_path.read_text(encoding="utf-8"))
-    plan = PlanV1.model_validate(payload)
+    output = validate_plan_payload(payload)
+    if not isinstance(output, PlanV1):
+        raise CompileError("Cannot compile a clarification response")
+    plan = output
     compiled = compile_plan(plan, python_executable=sys.executable)
     print(compiled.script)
     return 0

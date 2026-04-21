@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from nlsh.dataio import default_split_path, load_jsonl
 from nlsh.prompts import REPAIR_DEVELOPER_PROMPT, TRAINING_DEVELOPER_PROMPT
-from nlsh.schema import PlanV1, plan_json_schema, validate_plan_payload, validation_error_text
+from nlsh.schema import PlannerOutput, normalize_plan, plan_json_schema, validate_plan_payload, validation_error_text
 
 
 STEP_KINDS = {
@@ -28,7 +28,7 @@ PLAN_LEVEL_KEYS = {"needs_confirmation", "questions", "risk_level", "notes", "ve
 
 
 class Planner(Protocol):
-    def plan(self, prompt: str) -> PlanV1:
+    def plan(self, prompt: str) -> PlannerOutput:
         ...
 
 
@@ -51,6 +51,7 @@ class PlannerConfig:
     model: str
     base_url: str
     api_key: str
+    request_timeout: float
 
     @classmethod
     def from_env(cls) -> "PlannerConfig":
@@ -64,6 +65,7 @@ class PlannerConfig:
             model=os.environ.get("NLSH_MODEL", "microsoft/Phi-4-mini-instruct"),
             base_url=os.environ.get("NLSH_BASE_URL", "https://router.huggingface.co/v1"),
             api_key=api_key,
+            request_timeout=float(os.environ.get("NLSH_REQUEST_TIMEOUT", "60")),
         )
 
     def is_vllm_like(self) -> bool:
@@ -160,68 +162,56 @@ def _coerce_step_payload(step: Any) -> Any:
         coerced = {"kind": nested_kind, **nested_payload, **coerced}
 
     if coerced.get("kind") == "find_files":
+        roots = coerced.pop("roots", None)
+        if roots is not None and "root" not in coerced:
+            coerced["root"] = roots[0] if isinstance(roots, list) and roots else roots
         path = coerced.pop("path", None)
-        if path is not None and "roots" not in coerced:
-            coerced["roots"] = [path] if isinstance(path, str) else path
+        if path is not None and "root" not in coerced:
+            coerced["root"] = path
         depth = coerced.pop("depth", None)
         if depth is not None and "max_depth" not in coerced:
             coerced["max_depth"] = depth
         pattern = coerced.pop("pattern", None)
-        if pattern is not None and "name_pattern" not in coerced:
-            coerced["name_pattern"] = pattern
-        file_type = coerced.get("file_type")
-        if file_type in {"csv", "pdf", "json"}:
-            coerced.setdefault("extension", f".{file_type}")
-            coerced["file_type"] = "file"
+        name_pattern = coerced.pop("name_pattern", None)
+        extension = coerced.pop("extension", None)
+        path_contains = coerced.pop("path_contains", None)
+        file_type = coerced.pop("file_type", None)
+        if extension is None and file_type in {"csv", "pdf", "json"}:
+            extension = f".{file_type}"
+        if "glob" not in coerced:
+            if pattern is not None:
+                coerced["glob"] = pattern
+            elif name_pattern is not None:
+                coerced["glob"] = name_pattern
+            elif extension is not None:
+                normalized_ext = extension if str(extension).startswith(".") else f".{extension}"
+                if path_contains:
+                    coerced["glob"] = f"*{path_contains}*{normalized_ext}"
+                else:
+                    coerced["glob"] = f"*{normalized_ext}"
+            elif path_contains is not None:
+                coerced["glob"] = f"*{path_contains}*"
     return coerced
 
 
 def _coerce_plan_payload(payload: dict[str, Any]) -> dict[str, Any]:
     coerced = dict(payload)
-    coerced.setdefault("version", "1")
+    if "kind" not in coerced:
+        if "clarifying_question" in coerced:
+            return {"kind": "clarification", "question": coerced["clarifying_question"]}
+        if "question" in coerced and "steps" not in coerced:
+            return {"kind": "clarification", "question": coerced["question"]}
+        coerced["kind"] = "plan"
     steps = coerced.get("steps")
 
     if isinstance(steps, list):
         coerced["steps"] = [_coerce_step_payload(step) for step in steps]
-
-    questions = coerced.get("questions")
-    if questions is None:
-        coerced["questions"] = []
-    elif isinstance(questions, list):
-        normalized_questions: list[Any] = []
-        for question in questions:
-            if isinstance(question, dict):
-                normalized = dict(question)
-                field_path = normalized.get("field_path")
-                if (
-                    isinstance(field_path, str)
-                    and not field_path.startswith("steps[")
-                    and isinstance(steps, list)
-                    and len(steps) == 1
-                ):
-                    normalized["field_path"] = f"steps[0].{field_path}"
-                if "prompt" not in normalized and "question" in normalized:
-                    normalized["prompt"] = normalized.pop("question")
-                if "prompt" not in normalized:
-                    normalized["prompt"] = f"Please provide {normalized.get('field_path', 'the missing value')}."
-                normalized_questions.append(normalized)
-            else:
-                normalized_questions.append(question)
-        coerced["questions"] = normalized_questions
-    else:
-        coerced["questions"] = []
-
-    notes = coerced.get("notes")
-    if notes is None:
-        coerced["notes"] = []
-    elif isinstance(notes, str):
-        coerced["notes"] = [notes]
-    coerced.setdefault("needs_confirmation", bool(coerced["questions"]))
-    coerced.setdefault("risk_level", "medium")
+    for key in PLAN_LEVEL_KEYS:
+        coerced.pop(key, None)
     return coerced
 
 
-def _validate_or_coerce_plan_payload(payload: str | bytes | dict[str, Any]) -> PlanV1:
+def _validate_or_coerce_plan_payload(payload: str | bytes | dict[str, Any]) -> PlannerOutput:
     if isinstance(payload, dict):
         try:
             return validate_plan_payload(payload)
@@ -302,10 +292,15 @@ class OpenAIPlanner:
         )
         return _extract_message_text(response.choices[0].message).strip()
 
-    def plan(self, prompt: str) -> PlanV1:
+    def plan(self, prompt: str) -> PlannerOutput:
         from openai import OpenAI
 
-        client = OpenAI(base_url=self.config.base_url, api_key=self.config.api_key)
+        client = OpenAI(
+            base_url=self.config.base_url,
+            api_key=self.config.api_key,
+            timeout=self.config.request_timeout,
+            max_retries=0,
+        )
         response = client.chat.completions.create(
             **self._request_kwargs(
                 developer_prompt=TRAINING_DEVELOPER_PROMPT,
@@ -340,11 +335,11 @@ class GoldPlanner:
         path = dataset_path or default_split_path("train")
         self.records = load_jsonl(path)
         self.prompt_to_plan = {
-            record["prompt"].strip(): PlanV1.model_validate(record["plan"])
+            record["prompt"].strip(): validate_plan_payload(record["plan"])
             for record in self.records
         }
 
-    def plan(self, prompt: str) -> PlanV1:
+    def plan(self, prompt: str) -> PlannerOutput:
         key = prompt.strip()
         if key not in self.prompt_to_plan:
             raise KeyError(f"Prompt not found in gold dataset: {prompt!r}")
@@ -359,5 +354,5 @@ def load_planner(name: str, dataset_path: Path | None = None) -> Planner:
     raise ValueError(f"Unsupported planner: {name}")
 
 
-def plan_to_pretty_json(plan: PlanV1) -> str:
-    return json.dumps(plan.model_dump(mode="json", exclude_none=False), indent=2, ensure_ascii=False)
+def plan_to_pretty_json(plan: PlannerOutput) -> str:
+    return json.dumps(normalize_plan(plan), indent=2, ensure_ascii=False)

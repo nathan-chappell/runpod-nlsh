@@ -87,18 +87,13 @@ def _require_single_match_lines(var_name: str, label: str) -> list[str]:
 
 
 def _find_command(step: FindFilesStep) -> str:
-    parts: list[str] = ["find"]
-    parts.extend(_quote(root) for root in step.roots)
+    parts: list[str] = ["find", _quote(step.root)]
     if step.max_depth is not None:
         parts.extend(["-maxdepth", str(step.max_depth)])
-    parts.extend(["-type", "d" if step.file_type == "directory" else "f"])
-    if step.name_pattern:
-        parts.extend(["-name", _quote(step.name_pattern)])
-    if step.extension:
-        normalized_ext = step.extension if step.extension.startswith(".") else f".{step.extension}"
-        parts.extend(["-name", _quote(f"*{normalized_ext}")])
-    if step.path_contains:
-        parts.extend(["-path", _quote(f"*{step.path_contains}*")])
+    parts.extend(["-type", "f"])
+    if step.glob:
+        root_prefix = step.root.rstrip("/") or "."
+        parts.extend(["-path", _quote(f"{root_prefix}/{step.glob}")])
     parts.append("-print0")
     return " ".join(parts) + " | sort -z"
 

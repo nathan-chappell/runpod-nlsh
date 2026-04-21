@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
 
 
 def _reject_control_chars(value: str) -> str:
@@ -15,37 +15,15 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
-class ClarificationQuestion(StrictModel):
-    field_path: str
-    prompt: str
-    expected_type: Literal["string", "integer", "number", "boolean", "string_list"] = "string"
-    required: bool = True
-
-    @field_validator("field_path", "prompt")
-    @classmethod
-    def validate_text_fields(cls, value: str) -> str:
-        return _reject_control_chars(value)
-
-
 class FindFilesStep(StrictModel):
     kind: Literal["find_files"] = "find_files"
-    roots: list[str] = Field(default_factory=lambda: ["."])
-    name_pattern: str | None = None
-    extension: str | None = None
-    path_contains: str | None = None
+    root: str = "."
+    glob: str | None = None
     max_depth: int | None = Field(default=None, ge=0)
-    file_type: Literal["file", "directory"] = "file"
 
-    @field_validator("roots", mode="after")
+    @field_validator("root", "glob")
     @classmethod
-    def validate_roots(cls, value: list[str]) -> list[str]:
-        if not value:
-            raise ValueError("roots must contain at least one path")
-        return [_reject_control_chars(item) for item in value]
-
-    @field_validator("name_pattern", "extension", "path_contains")
-    @classmethod
-    def validate_optional_text_fields(cls, value: str | None) -> str | None:
+    def validate_text_fields(cls, value: str | None) -> str | None:
         if value is None:
             return None
         return _reject_control_chars(value)
@@ -233,17 +211,8 @@ Step = Annotated[
 
 
 class PlanV1(StrictModel):
-    version: Literal["1"] = "1"
+    kind: Literal["plan"] = "plan"
     steps: list[Step]
-    needs_confirmation: bool = False
-    questions: list[ClarificationQuestion] = Field(default_factory=list)
-    risk_level: Literal["low", "medium", "high"] = "medium"
-    notes: list[str] = Field(default_factory=list)
-
-    @field_validator("notes", mode="after")
-    @classmethod
-    def validate_notes(cls, value: list[str]) -> list[str]:
-        return [_reject_control_chars(item) for item in value]
 
     @model_validator(mode="after")
     def validate_shape(self) -> "PlanV1":
@@ -256,23 +225,35 @@ class PlanV1(StrictModel):
                 raise ValueError("find_files can only be the first step")
         if len(self.steps) > 1 and isinstance(self.steps[-1], FindFilesStep):
             raise ValueError("find_files cannot be the terminal step in a multi-step plan")
-        if self.questions and not self.needs_confirmation:
-            raise ValueError("questions require needs_confirmation=true")
         return self
 
 
+class Clarification(StrictModel):
+    kind: Literal["clarification"] = "clarification"
+    question: str
+
+    @field_validator("question")
+    @classmethod
+    def validate_question(cls, value: str) -> str:
+        return _reject_control_chars(value)
+
+
+PlannerOutput = Annotated[PlanV1 | Clarification, Field(discriminator="kind")]
+PLANNER_OUTPUT_ADAPTER = TypeAdapter(PlannerOutput)
+
+
 def plan_json_schema() -> dict[str, Any]:
-    return PlanV1.model_json_schema()
+    return PLANNER_OUTPUT_ADAPTER.json_schema()
 
 
-def validate_plan_payload(payload: str | bytes | dict[str, Any]) -> PlanV1:
+def validate_plan_payload(payload: str | bytes | dict[str, Any]) -> PlannerOutput:
     if isinstance(payload, dict):
-        return PlanV1.model_validate(payload)
-    return PlanV1.model_validate_json(payload)
+        return PLANNER_OUTPUT_ADAPTER.validate_python(payload)
+    return PLANNER_OUTPUT_ADAPTER.validate_json(payload)
 
 
-def normalize_plan(plan: PlanV1) -> dict[str, Any]:
-    return plan.model_dump(mode="json", exclude_none=False)
+def normalize_plan(plan: PlannerOutput) -> dict[str, Any]:
+    return PLANNER_OUTPUT_ADAPTER.dump_python(plan, mode="json", exclude_none=False)
 
 
 def validation_error_text(error: ValidationError) -> str:
