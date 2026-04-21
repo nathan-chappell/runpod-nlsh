@@ -11,6 +11,7 @@
 - Python helpers for CSV-to-JSON conversion and simple PDF text search
 - Seed `train/dev/test` message datasets for fine-tuning and eval
 - A starter Axolotl config for `microsoft/Phi-4-mini-instruct` LoRA
+- A pod eval image and manifest for sequential vLLM model comparisons
 
 ## Supported Actions
 
@@ -56,21 +57,13 @@ You can inspect the current machine state without installing anything:
 ./scripts/bootstrap_system_deps.sh --check
 ```
 
-Set credentials in `.env` or your shell:
+Set credentials in `.env` or your shell when using an OpenAI-compatible planner endpoint:
 
 ```bash
 export NLSH_API_KEY=...
-export NLSH_BASE_URL=https://api.runpod.ai/v2/ENDPOINT_ID/openai/v1
+export NLSH_BASE_URL=https://api.example.com/v1
 export NLSH_MODEL=microsoft/Phi-4-mini-instruct
 ```
-
-Run the configured Runpod endpoint against the dev messages:
-
-```bash
-./.venv/bin/python scripts/runpod_dev_eval.py --timeout 30
-```
-
-The script writes a readable log to `artifacts/runpod_dev_eval.txt` and a structured report to `artifacts/runpod_dev_eval.json`.
 
 ## CLI
 
@@ -96,6 +89,50 @@ Evaluate against the seed dataset:
 
 ```bash
 ./.venv/bin/nlsh eval --planner gold --split test
+```
+
+## Pod Eval
+
+The pod eval flow builds a lean image with the project, system tools, configs, and datasets. Model weights are downloaded at pod startup into Runpod persistent storage, so the Docker image stays small enough to push and pull normally.
+
+```bash
+docker build -f Dockerfile.pod-eval -t YOUR_DOCKERHUB_USER/nlsh-pod-eval:latest .
+docker push YOUR_DOCKERHUB_USER/nlsh-pod-eval:latest
+```
+
+Create a Runpod pod with:
+
+- GPU: RTX 4090
+- Image: `YOUR_DOCKERHUB_USER/nlsh-pod-eval:latest`
+- Persistent or network volume mounted at `/workspace`
+- `HF_TOKEN` set from a Runpod secret
+- Recommended volume size: at least 100 GB
+
+The image starts a full dev eval automatically. It downloads or reuses model weights in `/workspace/hf-cache`, writes reports to `/workspace/nlsh-artifacts`, records the final code in `/workspace/nlsh-artifacts/last_exit_code`, and then keeps the container alive for inspection. Set `POD_EVAL_EXIT_AFTER=1` to exit after the batch instead.
+
+Optional runtime knobs:
+
+```bash
+POD_EVAL_LIMIT=2
+POD_EVAL_TIMEOUT=90
+POD_EVAL_STARTUP_TIMEOUT=900
+```
+
+You can also run commands manually in the pod:
+
+```bash
+export HF_HOME=/workspace/hf-cache
+python scripts/pod_eval.py download-models
+python scripts/pod_eval.py run-suite --dataset data/dev.messages.jsonl
+```
+
+The manifest is `configs/pod_eval_models.json`. It currently runs `microsoft/Phi-4-mini-instruct`, `Qwen/Qwen3-8B`, and `HuggingFaceTB/SmolLM3-3B` sequentially through vLLM with conservative 24GB settings.
+
+For local non-GPU checks, validate the manifest and exercise the eval path with the gold planner:
+
+```bash
+./.venv/bin/python scripts/pod_eval.py download-models --dry-run
+./.venv/bin/python scripts/pod_eval.py run-model --planner gold --model microsoft/Phi-4-mini-instruct --limit 2
 ```
 
 ## Dataset And Training

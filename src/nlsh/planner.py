@@ -46,12 +46,25 @@ def _load_dotenv(path: Path = Path(".env")) -> None:
             os.environ[key] = value
 
 
+def _env_bool(name: str) -> bool | None:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return None
+    normalized = raw_value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be one of: 1, 0, true, false, yes, no, on, off")
+
+
 @dataclass(slots=True)
 class PlannerConfig:
     model: str
     base_url: str
     api_key: str
     request_timeout: float
+    force_vllm_like: bool | None = None
 
     @classmethod
     def from_env(cls) -> "PlannerConfig":
@@ -61,14 +74,18 @@ class PlannerConfig:
             or os.environ.get("HF_TOKEN")
             or ""
         )
+        force_vllm_like = _env_bool("NLSH_VLLM_LIKE")
         return cls(
             model=os.environ.get("NLSH_MODEL", "microsoft/Phi-4-mini-instruct"),
             base_url=os.environ.get("NLSH_BASE_URL", "https://router.huggingface.co/v1"),
             api_key=api_key,
             request_timeout=float(os.environ.get("NLSH_REQUEST_TIMEOUT", "60")),
+            force_vllm_like=force_vllm_like,
         )
 
     def is_vllm_like(self) -> bool:
+        if self.force_vllm_like is not None:
+            return self.force_vllm_like
         lowered = self.base_url.lower()
         return "runpod.ai" in lowered or "/openai/v1" in lowered or "vllm" in lowered
 
@@ -262,7 +279,8 @@ class OpenAIPlanner:
             "response_format": response_format,
         }
         if is_vllm_like:
-            kwargs["max_completion_tokens"] = 500
+            kwargs.pop("max_completion_tokens", None)
+            kwargs["max_tokens"] = 500
             kwargs["response_format"] = {"type": "json_object"}
             kwargs["extra_body"] = {
                 "chat_template_kwargs": {"enable_thinking": False},

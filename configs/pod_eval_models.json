@@ -1,0 +1,26 @@
+{
+  "defaults": {
+    "max_model_len": 4096,
+    "max_num_seqs": 1,
+    "gpu_memory_utilization": 0.85,
+    "generation_config": "vllm",
+    "vllm_args": []
+  },
+  "models": [
+    {
+      "id": "microsoft/Phi-4-mini-instruct",
+      "display_name": "Phi-4 Mini Instruct",
+      "trust_remote_code": true
+    },
+    {
+      "id": "Qwen/Qwen3-8B",
+      "display_name": "Qwen3 8B",
+      "trust_remote_code": false
+    },
+    {
+      "id": "HuggingFaceTB/SmolLM3-3B",
+      "display_name": "SmolLM3 3B",
+      "trust_remote_code": false
+    }
+  ]
+}

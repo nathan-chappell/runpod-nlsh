@@ -1,0 +1,24 @@
+# syntax=docker/dockerfile:1
+
+FROM vllm/vllm-openai:latest
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    HF_HOME=/workspace/hf-cache \
+    TRANSFORMERS_CACHE=/workspace/hf-cache \
+    NLSH_VLLM_LIKE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /opt/nlsh
+
+COPY pyproject.toml README.md ./
+COPY src ./src
+COPY data ./data
+COPY configs ./configs
+COPY scripts ./scripts
+
+RUN ./scripts/bootstrap_system_deps.sh \
+    && python -m pip install --no-cache-dir -e . \
+    && chmod +x scripts/pod_eval.py scripts/runpod_pod_eval.sh
+
+ENTRYPOINT []
+CMD ["bash", "scripts/runpod_pod_eval.sh"]
