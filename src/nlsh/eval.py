@@ -108,12 +108,12 @@ def evaluate_planner(
 
 
 def write_eval_artifact(results: dict[str, Any], output_dir: Path) -> Path:
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    output_path = output_dir / f"eval-{timestamp}.json"
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    split = str(results.get("split", "eval"))
+    output_path = output_dir / f"{split}-eval-{timestamp}.json"
     latest_path = output_dir / "latest.json"
     ensure_parent(output_path)
     payload = json.dumps(results, indent=2, ensure_ascii=False)
     output_path.write_text(payload + "\n", encoding="utf-8")
     latest_path.write_text(payload + "\n", encoding="utf-8")
     return output_path
-

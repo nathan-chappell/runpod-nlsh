@@ -33,7 +33,7 @@ class FindFilesStep(StrictModel):
     name_pattern: str | None = None
     extension: str | None = None
     path_contains: str | None = None
-    max_depth: int | None = None
+    max_depth: int | None = Field(default=None, ge=0)
     file_type: Literal["file", "directory"] = "file"
 
     @field_validator("roots", mode="after")
@@ -51,8 +51,8 @@ class FindFilesStep(StrictModel):
         return _reject_control_chars(value)
 
 
-class PdfCombineStep(StrictModel):
-    kind: Literal["pdf_combine"] = "pdf_combine"
+class PdfMergeStep(StrictModel):
+    kind: Literal["pdf_merge"] = "pdf_merge"
     input_files: list[str] | None = None
     output_file: str | None = None
 
@@ -73,24 +73,11 @@ class PdfCombineStep(StrictModel):
         return _reject_control_chars(value)
 
 
-class PdfCompressStep(StrictModel):
-    kind: Literal["pdf_compress"] = "pdf_compress"
-    input_file: str | None = None
-    output_file: str | None = None
-
-    @field_validator("input_file", "output_file")
-    @classmethod
-    def validate_text_fields(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        return _reject_control_chars(value)
-
-
 class PdfExtractPagesStep(StrictModel):
     kind: Literal["pdf_extract_pages"] = "pdf_extract_pages"
     input_file: str | None = None
-    page_start: int | None = None
-    page_end: int | None = None
+    page_start: int | None = Field(default=None, ge=1)
+    page_end: int | None = Field(default=None, ge=1)
     output_file: str | None = None
 
     @field_validator("input_file", "output_file")
@@ -111,95 +98,23 @@ class PdfExtractPagesStep(StrictModel):
         return self
 
 
-class PdfRotateStep(StrictModel):
-    kind: Literal["pdf_rotate"] = "pdf_rotate"
-    input_file: str | None = None
-    rotation_degrees: Literal[90, 180, 270] | None = None
+class PdfSearchTextStep(StrictModel):
+    kind: Literal["pdf_search_text"] = "pdf_search_text"
+    input_files: list[str] | None = None
+    query: str | None = None
     output_file: str | None = None
+    context_chars: int = Field(default=160, ge=0)
 
-    @field_validator("input_file", "output_file")
+    @field_validator("input_files", mode="after")
     @classmethod
-    def validate_text_fields(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        return _reject_control_chars(value)
-
-
-class MediaTranscodeForTvStep(StrictModel):
-    kind: Literal["media_transcode_for_tv"] = "media_transcode_for_tv"
-    input_file: str | None = None
-    output_file: str | None = None
-
-    @field_validator("input_file", "output_file")
-    @classmethod
-    def validate_text_fields(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        return _reject_control_chars(value)
-
-
-class MediaExtractAudioMp3Step(StrictModel):
-    kind: Literal["media_extract_audio_mp3"] = "media_extract_audio_mp3"
-    input_file: str | None = None
-    output_file: str | None = None
-
-    @field_validator("input_file", "output_file")
-    @classmethod
-    def validate_text_fields(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        return _reject_control_chars(value)
-
-
-class MediaClipStep(StrictModel):
-    kind: Literal["media_clip"] = "media_clip"
-    input_file: str | None = None
-    start_seconds: int | None = None
-    duration_seconds: int | None = None
-    output_file: str | None = None
-
-    @field_validator("input_file", "output_file")
-    @classmethod
-    def validate_text_fields(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        return _reject_control_chars(value)
-
-
-class CsvJoinStep(StrictModel):
-    kind: Literal["csv_join"] = "csv_join"
-    left_file: str | None = None
-    right_file: str | None = None
-    join_keys: list[str] | None = None
-    how: Literal["inner", "left", "right", "outer"] = "inner"
-    output_file: str | None = None
-
-    @field_validator("left_file", "right_file", "output_file")
-    @classmethod
-    def validate_text_fields(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        return _reject_control_chars(value)
-
-    @field_validator("join_keys", mode="after")
-    @classmethod
-    def validate_join_keys(cls, value: list[str] | None) -> list[str] | None:
+    def validate_input_files(cls, value: list[str] | None) -> list[str] | None:
         if value is None:
             return None
         if not value:
-            raise ValueError("join_keys cannot be empty")
+            raise ValueError("input_files cannot be empty")
         return [_reject_control_chars(item) for item in value]
 
-
-class CsvFilterRowsStep(StrictModel):
-    kind: Literal["csv_filter_rows"] = "csv_filter_rows"
-    input_file: str | None = None
-    filter_column: str | None = None
-    filter_operator: Literal["eq", "ne", "gt", "gte", "lt", "lte", "contains"] | None = None
-    filter_value: str | int | float | bool | None = None
-    output_file: str | None = None
-
-    @field_validator("input_file", "filter_column", "output_file")
+    @field_validator("query", "output_file")
     @classmethod
     def validate_text_fields(cls, value: str | None) -> str | None:
         if value is None:
@@ -207,10 +122,12 @@ class CsvFilterRowsStep(StrictModel):
         return _reject_control_chars(value)
 
 
-class CsvSelectColumnsStep(StrictModel):
-    kind: Literal["csv_select_columns"] = "csv_select_columns"
+JsonScalar = str | int | float | bool
+
+
+class CsvToJsonStep(StrictModel):
+    kind: Literal["csv_to_json"] = "csv_to_json"
     input_file: str | None = None
-    columns: list[str] | None = None
     output_file: str | None = None
 
     @field_validator("input_file", "output_file")
@@ -220,48 +137,69 @@ class CsvSelectColumnsStep(StrictModel):
             return None
         return _reject_control_chars(value)
 
-    @field_validator("columns", mode="after")
+
+class JsonFilterStep(StrictModel):
+    kind: Literal["json_filter"] = "json_filter"
+    input_file: str | None = None
+    field: str | None = None
+    operator: Literal["eq", "ne", "gt", "gte", "lt", "lte", "contains"] | None = None
+    value: JsonScalar | None = None
+    output_file: str | None = None
+
+    @field_validator("input_file", "field", "output_file")
     @classmethod
-    def validate_columns(cls, value: list[str] | None) -> list[str] | None:
+    def validate_text_fields(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _reject_control_chars(value)
+
+
+class JsonSelectFieldsStep(StrictModel):
+    kind: Literal["json_select_fields"] = "json_select_fields"
+    input_file: str | None = None
+    fields: list[str] | None = None
+    output_file: str | None = None
+
+    @field_validator("input_file", "output_file")
+    @classmethod
+    def validate_text_fields(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _reject_control_chars(value)
+
+    @field_validator("fields", mode="after")
+    @classmethod
+    def validate_fields(cls, value: list[str] | None) -> list[str] | None:
         if value is None:
             return None
         if not value:
-            raise ValueError("columns cannot be empty")
+            raise ValueError("fields cannot be empty")
         return [_reject_control_chars(item) for item in value]
 
 
-class CsvSortRowsStep(StrictModel):
-    kind: Literal["csv_sort_rows"] = "csv_sort_rows"
+class JsonSortStep(StrictModel):
+    kind: Literal["json_sort"] = "json_sort"
     input_file: str | None = None
-    sort_by: list[str] | None = None
+    field: str | None = None
     descending: bool = False
     output_file: str | None = None
 
-    @field_validator("input_file", "output_file")
+    @field_validator("input_file", "field", "output_file")
     @classmethod
     def validate_text_fields(cls, value: str | None) -> str | None:
         if value is None:
             return None
         return _reject_control_chars(value)
 
-    @field_validator("sort_by", mode="after")
-    @classmethod
-    def validate_sort_by(cls, value: list[str] | None) -> list[str] | None:
-        if value is None:
-            return None
-        if not value:
-            raise ValueError("sort_by cannot be empty")
-        return [_reject_control_chars(item) for item in value]
 
-
-class CsvGroupCountStep(StrictModel):
-    kind: Literal["csv_group_count"] = "csv_group_count"
+class JsonGroupCountStep(StrictModel):
+    kind: Literal["json_group_count"] = "json_group_count"
     input_file: str | None = None
     group_by: list[str] | None = None
     output_file: str | None = None
-    count_column: str = "count"
+    count_field: str = "count"
 
-    @field_validator("input_file", "output_file", "count_column")
+    @field_validator("input_file", "output_file", "count_field")
     @classmethod
     def validate_text_fields(cls, value: str | None) -> str | None:
         if value is None:
@@ -278,20 +216,18 @@ class CsvGroupCountStep(StrictModel):
         return [_reject_control_chars(item) for item in value]
 
 
+JsonStep = JsonFilterStep | JsonSelectFieldsStep | JsonSortStep | JsonGroupCountStep
+
 Step = Annotated[
     FindFilesStep
-    | PdfCombineStep
-    | PdfCompressStep
+    | PdfMergeStep
     | PdfExtractPagesStep
-    | PdfRotateStep
-    | MediaTranscodeForTvStep
-    | MediaExtractAudioMp3Step
-    | MediaClipStep
-    | CsvJoinStep
-    | CsvFilterRowsStep
-    | CsvSelectColumnsStep
-    | CsvSortRowsStep
-    | CsvGroupCountStep,
+    | PdfSearchTextStep
+    | CsvToJsonStep
+    | JsonFilterStep
+    | JsonSelectFieldsStep
+    | JsonSortStep
+    | JsonGroupCountStep,
     Field(discriminator="kind"),
 ]
 
@@ -313,13 +249,13 @@ class PlanV1(StrictModel):
     def validate_shape(self) -> "PlanV1":
         if not self.steps:
             raise ValueError("at least one step is required")
-        if len(self.steps) > 2:
-            raise ValueError("PlanV1 supports at most 2 steps")
-        if len(self.steps) == 2:
-            if self.steps[0].kind != "find_files":
-                raise ValueError("the first step must be find_files for a 2-step plan")
-            if self.steps[1].kind == "find_files":
-                raise ValueError("find_files cannot be the terminal step in a 2-step plan")
+        if len(self.steps) > 3:
+            raise ValueError("PlanV1 supports at most 3 steps")
+        for index, step in enumerate(self.steps):
+            if isinstance(step, FindFilesStep) and index != 0:
+                raise ValueError("find_files can only be the first step")
+        if len(self.steps) > 1 and isinstance(self.steps[-1], FindFilesStep):
+            raise ValueError("find_files cannot be the terminal step in a multi-step plan")
         if self.questions and not self.needs_confirmation:
             raise ValueError("questions require needs_confirmation=true")
         return self
@@ -341,4 +277,3 @@ def normalize_plan(plan: PlanV1) -> dict[str, Any]:
 
 def validation_error_text(error: ValidationError) -> str:
     return error.json(indent=2)
-

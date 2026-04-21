@@ -19,12 +19,12 @@ def test_command_run_returns_2_when_required_tool_is_missing(monkeypatch) -> Non
             "version": "1",
             "steps": [
                 {
-                    "kind": "csv_filter_rows",
-                    "input_file": "orders.csv",
-                    "filter_column": "status",
-                    "filter_operator": "eq",
-                    "filter_value": "paid",
-                    "output_file": "paid.csv",
+                    "kind": "json_filter",
+                    "input_file": "orders.json",
+                    "field": "status",
+                    "operator": "eq",
+                    "value": "paid",
+                    "output_file": "paid_orders.json",
                 }
             ],
             "needs_confirmation": False,
@@ -37,7 +37,7 @@ def test_command_run_returns_2_when_required_tool_is_missing(monkeypatch) -> Non
     monkeypatch.setattr("nlsh.cli.load_planner", lambda planner, dataset_path=None: StubPlanner(plan))
     monkeypatch.setattr(
         "nlsh.cli.ensure_required_tools",
-        lambda tools: (_ for _ in ()).throw(MissingToolsError(["mlr"])),
+        lambda tools: (_ for _ in ()).throw(MissingToolsError(["jq"])),
     )
 
     args = argparse.Namespace(

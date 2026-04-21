@@ -5,11 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "nlsh"
 version = "0.1.0"
-description = "Natural-language interface for a safe subset of shell utilities."
+description = "Natural-language file, PDF, and JSON workflow compiler."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "openai>=2.0.0,<3.0.0",
+  "pypdf>=6.0.0,<7.0.0",
   "pydantic>=2.9.0,<3.0.0",
 ]
 

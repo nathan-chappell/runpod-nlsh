@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TOOLS=(qpdf ghostscript ffmpeg findutils miller)
-BINARIES=(qpdf gs ffmpeg find mlr)
+TOOLS=(qpdf findutils jq)
+BINARIES=(qpdf find jq)
 
 mode="install"
 if [[ "${1:-}" == "--check" ]]; then

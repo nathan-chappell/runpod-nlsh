@@ -1,26 +1,21 @@
 from __future__ import annotations
 
 import json
-import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
 from nlsh.schema import (
-    CsvFilterRowsStep,
-    CsvGroupCountStep,
-    CsvJoinStep,
-    CsvSelectColumnsStep,
-    CsvSortRowsStep,
+    CsvToJsonStep,
     FindFilesStep,
-    MediaClipStep,
-    MediaExtractAudioMp3Step,
-    MediaTranscodeForTvStep,
-    PdfCombineStep,
-    PdfCompressStep,
+    JsonFilterStep,
+    JsonGroupCountStep,
+    JsonSelectFieldsStep,
+    JsonSortStep,
     PdfExtractPagesStep,
-    PdfRotateStep,
+    PdfMergeStep,
+    PdfSearchTextStep,
     PlanV1,
 )
 
@@ -37,12 +32,13 @@ class CompileResult:
 
 
 TOOL_PACKAGES = {
-    "ffmpeg": "ffmpeg",
     "find": "findutils",
-    "gs": "ghostscript",
-    "mlr": "miller",
+    "jq": "jq",
     "qpdf": "qpdf",
 }
+
+
+JsonTerminalStep = JsonFilterStep | JsonSelectFieldsStep | JsonSortStep | JsonGroupCountStep
 
 
 def _quote(value: str) -> str:
@@ -53,6 +49,18 @@ def _basename_with_suffix(path: str, suffix: str, ext: str | None = None) -> str
     source = Path(path)
     extension = ext if ext is not None else source.suffix
     return f"{source.stem}{suffix}{extension}"
+
+
+def _path_expr(path: str) -> str:
+    if path.startswith("$") or path.startswith('"$') or path.startswith('"${'):
+        return path
+    return _quote(path)
+
+
+def _default_json_output(input_file: str, suffix: str) -> str:
+    if input_file.startswith("$") or input_file.startswith('"$') or input_file.startswith('"${'):
+        return f"output{suffix}.json"
+    return _basename_with_suffix(input_file, suffix, ".json")
 
 
 def _check_output_lines(output_file: str) -> list[str]:
@@ -67,7 +75,7 @@ def _check_output_lines(output_file: str) -> list[str]:
 
 def _require_single_match_lines(var_name: str, label: str) -> list[str]:
     return [
-        f'if [ "${{{var_name}[@]}}" = "" ]; then',
+        f'if [ "${{#{var_name}[@]}}" -eq 0 ]; then',
         f'  echo "No matches found for {label}" >&2',
         "  exit 1",
         "fi",
@@ -76,50 +84,6 @@ def _require_single_match_lines(var_name: str, label: str) -> list[str]:
         "  exit 1",
         "fi",
     ]
-
-
-def _require_no_commas(values: list[str], label: str) -> None:
-    for value in values:
-        if "," in value:
-            raise CompileError(f"{label} values cannot contain commas for shell compilation: {value!r}")
-
-
-def _mlr_field_list(values: list[str], label: str) -> str:
-    _require_no_commas(values, label)
-    return ",".join(values)
-
-
-def _mlr_field_ref(field_name: str) -> str:
-    return f"$[{json.dumps(field_name)}]"
-
-
-def _mlr_value_literal(value: str | int | float | bool) -> str:
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (int, float)):
-        return str(value)
-    return json.dumps(value)
-
-
-def _mlr_filter_expression(step: CsvFilterRowsStep) -> str:
-    if step.filter_column is None or step.filter_operator is None or step.filter_value is None:
-        raise CompileError("csv_filter_rows requires filter_column, filter_operator, and filter_value")
-    field_ref = _mlr_field_ref(step.filter_column)
-    if step.filter_operator == "contains":
-        pattern = re.escape(str(step.filter_value))
-        return f"{field_ref} =~ {json.dumps(pattern)}"
-
-    operator_map = {
-        "eq": "==",
-        "ne": "!=",
-        "gt": ">",
-        "gte": ">=",
-        "lt": "<",
-        "lte": "<=",
-    }
-    operator = operator_map[step.filter_operator]
-    literal = _mlr_value_literal(step.filter_value)
-    return f"{field_ref} {operator} {literal}"
 
 
 def _find_command(step: FindFilesStep) -> str:
@@ -150,48 +114,17 @@ def _find_lines(step: FindFilesStep, var_name: str = "MATCHES") -> list[str]:
     ]
 
 
-def _compile_pdf_combine(
-    step: PdfCombineStep,
-    previous_find: bool,
-) -> tuple[list[str], list[str], str]:
-    output_file = step.output_file or "combined.pdf"
+def _compile_pdf_merge(step: PdfMergeStep, previous_find: bool) -> tuple[list[str], list[str], str]:
+    output_file = step.output_file or "merged.pdf"
     lines = _check_output_lines(output_file)
     if previous_find:
         inputs_expr = '"${MATCHES[@]}"'
     else:
         if not step.input_files:
-            raise CompileError("pdf_combine requires input_files unless it follows find_files")
+            raise CompileError("pdf_merge requires input_files unless it follows find_files")
         inputs_expr = " ".join(_quote(item) for item in step.input_files)
-    lines.append(
-        f"qpdf --empty --pages {inputs_expr} -- {_quote(output_file)}"
-    )
-    return lines, [output_file], f"Combine PDFs into {output_file}"
-
-
-def _compile_pdf_compress(
-    step: PdfCompressStep,
-    previous_find: bool,
-) -> tuple[list[str], list[str], str]:
-    if previous_find:
-        lines = _require_single_match_lines("MATCHES", "pdf input")
-        input_expr = '"${MATCHES[0]}"'
-        input_name = "matched input PDF"
-        source_for_name = "input.pdf"
-    else:
-        if not step.input_file:
-            raise CompileError("pdf_compress requires input_file")
-        lines = []
-        input_expr = _quote(step.input_file)
-        input_name = step.input_file
-        source_for_name = step.input_file
-    output_file = step.output_file or _basename_with_suffix(source_for_name, "_compressed", ".pdf")
-    lines.extend(_check_output_lines(output_file))
-    lines.append(
-        "gs -q -dBATCH -dNOPAUSE -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 "
-        "-dPDFSETTINGS=/ebook "
-        f"-sOutputFile={_quote(output_file)} {input_expr}"
-    )
-    return lines, [output_file], f"Compress {input_name} into {output_file}"
+    lines.append(f"qpdf --empty --pages {inputs_expr} -- {_quote(output_file)}")
+    return lines, [output_file], f"Merge PDFs into {output_file}"
 
 
 def _compile_pdf_extract_pages(
@@ -216,273 +149,158 @@ def _compile_pdf_extract_pages(
         ".pdf",
     )
     lines.extend(_check_output_lines(output_file))
-    page_range = f"{step.page_start}-{step.page_end}"
-    lines.append(f"qpdf {input_expr} --pages . {page_range} -- {_quote(output_file)}")
-    return lines, [output_file], f"Extract pages {step.page_start}-{step.page_end} into {output_file}"
+    lines.append(f"qpdf {input_expr} --pages . {step.page_start}-{step.page_end} -- {_quote(output_file)}")
+    return lines, [output_file], f"Extract PDF pages into {output_file}"
 
 
-def _compile_pdf_rotate(
-    step: PdfRotateStep,
+def _compile_pdf_search_text(
+    step: PdfSearchTextStep,
     previous_find: bool,
+    *,
+    python_executable: str,
 ) -> tuple[list[str], list[str], str]:
-    if step.rotation_degrees is None:
-        raise CompileError("pdf_rotate requires rotation_degrees")
+    if not step.query:
+        raise CompileError("pdf_search_text requires query")
+    output_file = step.output_file or "pdf_search_matches.json"
+    lines = _check_output_lines(output_file)
     if previous_find:
-        lines = _require_single_match_lines("MATCHES", "pdf input")
-        input_expr = '"${MATCHES[0]}"'
-        source_for_name = "input.pdf"
+        inputs_expr = '"${MATCHES[@]}"'
     else:
-        if not step.input_file:
-            raise CompileError("pdf_rotate requires input_file")
-        lines = []
-        input_expr = _quote(step.input_file)
-        source_for_name = step.input_file
-    output_file = step.output_file or _basename_with_suffix(source_for_name, "_rotated", ".pdf")
-    lines.extend(_check_output_lines(output_file))
+        if not step.input_files:
+            raise CompileError("pdf_search_text requires input_files unless it follows find_files")
+        inputs_expr = " ".join(_quote(item) for item in step.input_files)
     lines.append(
-        f"qpdf {input_expr} --rotate=+{step.rotation_degrees}:1-z -- {_quote(output_file)}"
+        f"{_quote(python_executable)} -m nlsh.pdf_search "
+        f"--query {_quote(step.query)} "
+        f"--context-chars {step.context_chars} "
+        f"--output {_quote(output_file)} "
+        f"{inputs_expr}"
     )
-    return lines, [output_file], f"Rotate PDF into {output_file}"
+    return lines, [output_file], f"Search PDF text into {output_file}"
 
 
-def _compile_media_transcode(
-    step: MediaTranscodeForTvStep,
+def _compile_csv_to_json(
+    step: CsvToJsonStep,
     previous_find: bool,
+    *,
+    python_executable: str,
+    output_file: str | None = None,
+    check_output: bool = True,
 ) -> tuple[list[str], list[str], str]:
-    if previous_find:
-        lines = _require_single_match_lines("MATCHES", "media input")
-        input_expr = '"${MATCHES[0]}"'
-        source_for_name = "input.mp4"
-    else:
-        if not step.input_file:
-            raise CompileError("media_transcode_for_tv requires input_file")
-        lines = []
-        input_expr = _quote(step.input_file)
-        source_for_name = step.input_file
-    output_file = step.output_file or _basename_with_suffix(source_for_name, "_tv", ".mp4")
-    lines.extend(_check_output_lines(output_file))
-    lines.append(
-        "ffmpeg -hide_banner -loglevel error -nostdin -n "
-        f"-i {input_expr} -c:v libx264 -preset medium -crf 23 "
-        f"-c:a aac -b:a 192k -movflags +faststart {_quote(output_file)}"
-    )
-    return lines, [output_file], f"Transcode media for TV playback into {output_file}"
-
-
-def _compile_media_extract_audio(
-    step: MediaExtractAudioMp3Step,
-    previous_find: bool,
-) -> tuple[list[str], list[str], str]:
-    if previous_find:
-        lines = _require_single_match_lines("MATCHES", "media input")
-        input_expr = '"${MATCHES[0]}"'
-        source_for_name = "input.mp4"
-    else:
-        if not step.input_file:
-            raise CompileError("media_extract_audio_mp3 requires input_file")
-        lines = []
-        input_expr = _quote(step.input_file)
-        source_for_name = step.input_file
-    output_file = step.output_file or _basename_with_suffix(source_for_name, "", ".mp3")
-    lines.extend(_check_output_lines(output_file))
-    lines.append(
-        "ffmpeg -hide_banner -loglevel error -nostdin -n "
-        f"-i {input_expr} -vn -codec:a libmp3lame -qscale:a 2 {_quote(output_file)}"
-    )
-    return lines, [output_file], f"Extract MP3 audio into {output_file}"
-
-
-def _compile_media_clip(
-    step: MediaClipStep,
-    previous_find: bool,
-) -> tuple[list[str], list[str], str]:
-    if step.start_seconds is None or step.duration_seconds is None:
-        raise CompileError("media_clip requires start_seconds and duration_seconds")
-    if previous_find:
-        lines = _require_single_match_lines("MATCHES", "media input")
-        input_expr = '"${MATCHES[0]}"'
-        source_for_name = "input.mp4"
-    else:
-        if not step.input_file:
-            raise CompileError("media_clip requires input_file")
-        lines = []
-        input_expr = _quote(step.input_file)
-        source_for_name = step.input_file
-    output_file = step.output_file or _basename_with_suffix(source_for_name, "_clip", ".mp4")
-    lines.extend(_check_output_lines(output_file))
-    lines.append(
-        "ffmpeg -hide_banner -loglevel error -nostdin -n "
-        f"-ss {step.start_seconds} -i {input_expr} -t {step.duration_seconds} "
-        f"-c copy {_quote(output_file)}"
-    )
-    return lines, [output_file], f"Clip media into {output_file}"
-
-
-def _compile_csv_join(
-    step: CsvJoinStep,
-    previous_find: bool,
-) -> tuple[list[str], list[str], str]:
-    if not step.join_keys:
-        raise CompileError("csv_join requires join_keys")
-    if previous_find:
-        lines = [
-            'if [ "${#MATCHES[@]}" -ne 2 ]; then',
-            '  echo "csv_join expects exactly 2 matches from find_files." >&2',
-            "  exit 1",
-            "fi",
-        ]
-        left_expr = '"${MATCHES[0]}"'
-        right_expr = '"${MATCHES[1]}"'
-        source_for_name = "joined.csv"
-    else:
-        if not step.left_file or not step.right_file:
-            raise CompileError("csv_join requires left_file and right_file")
-        lines = []
-        left_expr = _quote(step.left_file)
-        right_expr = _quote(step.right_file)
-        source_for_name = step.left_file
-    output_file = step.output_file or _basename_with_suffix(source_for_name, "_joined", ".csv")
-    lines.extend(_check_output_lines(output_file))
-    join_keys = _mlr_field_list(step.join_keys, "join_keys")
-    join_modifiers = {
-        "inner": "",
-        "left": " --ul",
-        "right": " --ur",
-        "outer": " --ul --ur",
-    }[step.how]
-    lines.append(
-        f"mlr --csv join -f {left_expr} -j {_quote(join_keys)}{join_modifiers} {right_expr} > {_quote(output_file)}"
-    )
-    return lines, [output_file], f"Join CSV files into {output_file}"
-
-
-def _compile_csv_filter(
-    step: CsvFilterRowsStep,
-    previous_find: bool,
-) -> tuple[list[str], list[str], str]:
-    if step.filter_column is None or step.filter_operator is None or step.filter_value is None:
-        raise CompileError("csv_filter_rows requires filter_column, filter_operator, and filter_value")
     if previous_find:
         lines = _require_single_match_lines("MATCHES", "csv input")
         input_expr = '"${MATCHES[0]}"'
         source_for_name = "input.csv"
     else:
         if not step.input_file:
-            raise CompileError("csv_filter_rows requires input_file")
+            raise CompileError("csv_to_json requires input_file")
         lines = []
         input_expr = _quote(step.input_file)
         source_for_name = step.input_file
-    output_file = step.output_file or _basename_with_suffix(source_for_name, "_filtered", ".csv")
-    lines.extend(_check_output_lines(output_file))
-    expression = _mlr_filter_expression(step)
-    lines.append(
-        f"mlr --csv filter {_quote(expression)} {input_expr} > {_quote(output_file)}"
-    )
-    return lines, [output_file], f"Filter CSV rows into {output_file}"
+    target = output_file or step.output_file or _basename_with_suffix(source_for_name, "", ".json")
+    if check_output:
+        lines.extend(_check_output_lines(target))
+    lines.append(f"{_quote(python_executable)} -m nlsh.csv_to_json {input_expr} > {_path_expr(target)}")
+    return lines, [target], f"Convert CSV to JSON in {target}"
 
 
-def _compile_csv_select(
-    step: CsvSelectColumnsStep,
-    previous_find: bool,
-) -> tuple[list[str], list[str], str]:
-    if not step.columns:
-        raise CompileError("csv_select_columns requires columns")
-    if previous_find:
-        lines = _require_single_match_lines("MATCHES", "csv input")
-        input_expr = '"${MATCHES[0]}"'
-        source_for_name = "input.csv"
+def _jq_value_arg(value: str | int | float | bool) -> str:
+    return _quote(json.dumps(value))
+
+
+def _compile_json_filter(step: JsonFilterStep, input_file: str) -> tuple[list[str], list[str], str]:
+    if step.field is None or step.operator is None or step.value is None:
+        raise CompileError("json_filter requires field, operator, and value")
+    output_file = step.output_file or _default_json_output(input_file, "_filtered")
+    is_number = isinstance(step.value, (int, float)) and not isinstance(step.value, bool)
+    if step.operator in {"gt", "gte", "lt", "lte"} and is_number:
+        field_expr = "(.[$field] | tonumber?)"
     else:
-        if not step.input_file:
-            raise CompileError("csv_select_columns requires input_file")
-        lines = []
-        input_expr = _quote(step.input_file)
-        source_for_name = step.input_file
-    output_file = step.output_file or _basename_with_suffix(source_for_name, "_selected", ".csv")
-    lines.extend(_check_output_lines(output_file))
-    columns = _mlr_field_list(step.columns, "columns")
+        field_expr = ".[$field]"
+    operator_expr = {
+        "eq": ".[$field] == $value",
+        "ne": ".[$field] != $value",
+        "gt": f"{field_expr} > $value",
+        "gte": f"{field_expr} >= $value",
+        "lt": f"{field_expr} < $value",
+        "lte": f"{field_expr} <= $value",
+        "contains": "(.[$field] | tostring | contains($value | tostring))",
+    }[step.operator]
+    expression = f"map(select({operator_expr}))"
+    lines = _check_output_lines(output_file)
     lines.append(
-        f"mlr --csv cut -o -f {_quote(columns)} {input_expr} > {_quote(output_file)}"
+        "jq "
+        f"--arg field {_quote(step.field)} "
+        f"--argjson value {_jq_value_arg(step.value)} "
+        f"{_quote(expression)} {_path_expr(input_file)} > {_quote(output_file)}"
     )
-    return lines, [output_file], f"Select CSV columns into {output_file}"
+    return lines, [output_file], f"Filter JSON into {output_file}"
 
 
-def _compile_csv_sort(
-    step: CsvSortRowsStep,
-    previous_find: bool,
-) -> tuple[list[str], list[str], str]:
-    if not step.sort_by:
-        raise CompileError("csv_sort_rows requires sort_by")
-    if previous_find:
-        lines = _require_single_match_lines("MATCHES", "csv input")
-        input_expr = '"${MATCHES[0]}"'
-        source_for_name = "input.csv"
-    else:
-        if not step.input_file:
-            raise CompileError("csv_sort_rows requires input_file")
-        lines = []
-        input_expr = _quote(step.input_file)
-        source_for_name = step.input_file
-    output_file = step.output_file or _basename_with_suffix(source_for_name, "_sorted", ".csv")
-    lines.extend(_check_output_lines(output_file))
-    sort_fields = _mlr_field_list(step.sort_by, "sort_by")
-    sort_flag = "-r" if step.descending else "-f"
+def _compile_json_select_fields(step: JsonSelectFieldsStep, input_file: str) -> tuple[list[str], list[str], str]:
+    if not step.fields:
+        raise CompileError("json_select_fields requires fields")
+    output_file = step.output_file or _default_json_output(input_file, "_selected")
+    expression = 'map(. as $row | reduce $fields[] as $field ({}; . + {($field): $row[$field]}))'
+    lines = _check_output_lines(output_file)
     lines.append(
-        f"mlr --csv sort {sort_flag} {_quote(sort_fields)} {input_expr} > {_quote(output_file)}"
+        "jq "
+        f"--argjson fields {_quote(json.dumps(step.fields))} "
+        f"{_quote(expression)} {_path_expr(input_file)} > {_quote(output_file)}"
     )
-    return lines, [output_file], f"Sort CSV rows into {output_file}"
+    return lines, [output_file], f"Select JSON fields into {output_file}"
 
 
-def _compile_csv_group_count(
-    step: CsvGroupCountStep,
-    previous_find: bool,
-) -> tuple[list[str], list[str], str]:
+def _compile_json_sort(step: JsonSortStep, input_file: str) -> tuple[list[str], list[str], str]:
+    if not step.field:
+        raise CompileError("json_sort requires field")
+    output_file = step.output_file or _default_json_output(input_file, "_sorted")
+    expression = "sort_by(.[$field])"
+    if step.descending:
+        expression = f"{expression} | reverse"
+    lines = _check_output_lines(output_file)
+    lines.append(
+        "jq "
+        f"--arg field {_quote(step.field)} "
+        f"{_quote(expression)} {_path_expr(input_file)} > {_quote(output_file)}"
+    )
+    return lines, [output_file], f"Sort JSON into {output_file}"
+
+
+def _compile_json_group_count(step: JsonGroupCountStep, input_file: str) -> tuple[list[str], list[str], str]:
     if not step.group_by:
-        raise CompileError("csv_group_count requires group_by")
-    if previous_find:
-        lines = _require_single_match_lines("MATCHES", "csv input")
-        input_expr = '"${MATCHES[0]}"'
-        source_for_name = "input.csv"
-    else:
-        if not step.input_file:
-            raise CompileError("csv_group_count requires input_file")
-        lines = []
-        input_expr = _quote(step.input_file)
-        source_for_name = step.input_file
-    output_file = step.output_file or _basename_with_suffix(source_for_name, "_group_count", ".csv")
-    lines.extend(_check_output_lines(output_file))
-    group_fields = _mlr_field_list(step.group_by, "group_by")
-    lines.append(
-        f"mlr --csv count -g {_quote(group_fields)} -o {_quote(step.count_column)} {input_expr} > {_quote(output_file)}"
+        raise CompileError("json_group_count requires group_by")
+    output_file = step.output_file or _default_json_output(input_file, "_counts")
+    expression = (
+        "group_by([.[$fields[]]]) | "
+        "map(.[0] as $first | "
+        "(reduce $fields[] as $field ({}; . + {($field): $first[$field]})) + "
+        "{($count_field): length})"
     )
-    return lines, [output_file], f"Group and count CSV rows into {output_file}"
+    lines = _check_output_lines(output_file)
+    lines.append(
+        "jq "
+        f"--argjson fields {_quote(json.dumps(step.group_by))} "
+        f"--arg count_field {_quote(step.count_field)} "
+        f"{_quote(expression)} {_path_expr(input_file)} > {_quote(output_file)}"
+    )
+    return lines, [output_file], f"Count JSON groups into {output_file}"
 
 
-def _compile_terminal(step: object, previous_find: bool) -> tuple[list[str], list[str], str]:
-    if isinstance(step, PdfCombineStep):
-        return _compile_pdf_combine(step, previous_find)
-    if isinstance(step, PdfCompressStep):
-        return _compile_pdf_compress(step, previous_find)
-    if isinstance(step, PdfExtractPagesStep):
-        return _compile_pdf_extract_pages(step, previous_find)
-    if isinstance(step, PdfRotateStep):
-        return _compile_pdf_rotate(step, previous_find)
-    if isinstance(step, MediaTranscodeForTvStep):
-        return _compile_media_transcode(step, previous_find)
-    if isinstance(step, MediaExtractAudioMp3Step):
-        return _compile_media_extract_audio(step, previous_find)
-    if isinstance(step, MediaClipStep):
-        return _compile_media_clip(step, previous_find)
-    if isinstance(step, CsvJoinStep):
-        return _compile_csv_join(step, previous_find)
-    if isinstance(step, CsvFilterRowsStep):
-        return _compile_csv_filter(step, previous_find)
-    if isinstance(step, CsvSelectColumnsStep):
-        return _compile_csv_select(step, previous_find)
-    if isinstance(step, CsvSortRowsStep):
-        return _compile_csv_sort(step, previous_find)
-    if isinstance(step, CsvGroupCountStep):
-        return _compile_csv_group_count(step, previous_find)
-    raise CompileError(f"Unsupported step kind: {type(step)!r}")
+def _compile_json_terminal(step: JsonTerminalStep, input_file: str) -> tuple[list[str], list[str], str]:
+    if isinstance(step, JsonFilterStep):
+        return _compile_json_filter(step, input_file)
+    if isinstance(step, JsonSelectFieldsStep):
+        return _compile_json_select_fields(step, input_file)
+    if isinstance(step, JsonSortStep):
+        return _compile_json_sort(step, input_file)
+    if isinstance(step, JsonGroupCountStep):
+        return _compile_json_group_count(step, input_file)
+    raise CompileError(f"Unsupported JSON step: {type(step)!r}")
+
+
+def _terminal_input_file(step: JsonTerminalStep) -> str | None:
+    return step.input_file
 
 
 def summarize_outputs(outputs: Iterable[str]) -> list[str]:
@@ -494,22 +312,10 @@ def required_tools_for_plan(plan: PlanV1) -> list[str]:
     for step in plan.steps:
         if isinstance(step, FindFilesStep):
             tools.add("find")
-        elif isinstance(step, (PdfCombineStep, PdfExtractPagesStep, PdfRotateStep)):
+        elif isinstance(step, (PdfMergeStep, PdfExtractPagesStep)):
             tools.add("qpdf")
-        elif isinstance(step, PdfCompressStep):
-            tools.add("gs")
-        elif isinstance(step, (MediaTranscodeForTvStep, MediaExtractAudioMp3Step, MediaClipStep)):
-            tools.add("ffmpeg")
-        elif isinstance(step, (
-            CsvJoinStep,
-            CsvFilterRowsStep,
-            CsvSelectColumnsStep,
-            CsvSortRowsStep,
-            CsvGroupCountStep,
-        )):
-            tools.add("mlr")
-        else:
-            raise CompileError(f"Unsupported step kind: {type(step)!r}")
+        elif isinstance(step, (JsonFilterStep, JsonSelectFieldsStep, JsonSortStep, JsonGroupCountStep)):
+            tools.add("jq")
     return sorted(tools)
 
 
@@ -520,29 +326,83 @@ def compile_plan(plan: PlanV1, python_executable: str = "python") -> CompileResu
     if len(plan.steps) == 1 and isinstance(plan.steps[0], FindFilesStep):
         lines.extend(_find_lines(plan.steps[0]))
         lines.append('printf "%s\\n" "${MATCHES[@]}"')
-        return CompileResult(
-            script="\n".join(lines) + "\n",
-            summary="Find matching paths",
-            output_files=[],
-        )
+        return CompileResult("\n".join(lines) + "\n", "Find matching paths", [])
 
+    steps = plan.steps
     previous_find = False
-    terminal_step = plan.steps[0]
-    if len(plan.steps) == 2:
-        if not isinstance(plan.steps[0], FindFilesStep):
-            raise CompileError("2-step plans must start with find_files")
-        lines.extend(_find_lines(plan.steps[0]))
+    if isinstance(steps[0], FindFilesStep):
+        lines.extend(_find_lines(steps[0]))
         previous_find = True
-        terminal_step = plan.steps[1]
+        steps = steps[1:]
 
-    terminal_lines, outputs, summary = _compile_terminal(
-        terminal_step,
-        previous_find=previous_find,
-    )
-    lines.extend(terminal_lines)
-    output_files.extend(outputs)
-    return CompileResult(
-        script="\n".join(lines) + "\n",
-        summary=summary,
-        output_files=summarize_outputs(output_files),
-    )
+    if len(steps) == 1:
+        step = steps[0]
+        if isinstance(step, PdfMergeStep):
+            terminal_lines, outputs, summary = _compile_pdf_merge(step, previous_find)
+        elif isinstance(step, PdfExtractPagesStep):
+            terminal_lines, outputs, summary = _compile_pdf_extract_pages(step, previous_find)
+        elif isinstance(step, PdfSearchTextStep):
+            terminal_lines, outputs, summary = _compile_pdf_search_text(
+                step,
+                previous_find,
+                python_executable=python_executable,
+            )
+        elif isinstance(step, CsvToJsonStep):
+            terminal_lines, outputs, summary = _compile_csv_to_json(
+                step,
+                previous_find,
+                python_executable=python_executable,
+            )
+        elif isinstance(step, (JsonFilterStep, JsonSelectFieldsStep, JsonSortStep, JsonGroupCountStep)):
+            if previous_find:
+                terminal_lines = _require_single_match_lines("MATCHES", "json input")
+                input_file = '"${MATCHES[0]}"'
+                json_lines, outputs, summary = _compile_json_terminal(step, input_file)
+                terminal_lines.extend(json_lines)
+            else:
+                input_file = _terminal_input_file(step)
+                if not input_file:
+                    raise CompileError(f"{step.kind} requires input_file")
+                terminal_lines, outputs, summary = _compile_json_terminal(step, input_file)
+        else:
+            raise CompileError(f"Unsupported step kind: {type(step)!r}")
+        lines.extend(terminal_lines)
+        output_files.extend(outputs)
+        return CompileResult("\n".join(lines) + "\n", summary, summarize_outputs(output_files))
+
+    if len(steps) == 2 and isinstance(steps[0], CsvToJsonStep) and isinstance(
+        steps[1],
+        (JsonFilterStep, JsonSelectFieldsStep, JsonSortStep, JsonGroupCountStep),
+    ):
+        csv_step = steps[0]
+        json_step = steps[1]
+        if csv_step.output_file:
+            intermediate = csv_step.output_file
+            csv_lines, csv_outputs, _ = _compile_csv_to_json(
+                csv_step,
+                previous_find,
+                python_executable=python_executable,
+                output_file=intermediate,
+                check_output=True,
+            )
+            output_files.extend(csv_outputs)
+        else:
+            lines.extend([
+                'NLSH_TMP_JSON="$(mktemp --suffix=.json)"',
+                'trap \'rm -f "$NLSH_TMP_JSON"\' EXIT',
+            ])
+            intermediate = "$NLSH_TMP_JSON"
+            csv_lines, _, _ = _compile_csv_to_json(
+                csv_step,
+                previous_find,
+                python_executable=python_executable,
+                output_file=intermediate,
+                check_output=False,
+            )
+        lines.extend(csv_lines)
+        json_lines, json_outputs, summary = _compile_json_terminal(json_step, intermediate)
+        lines.extend(json_lines)
+        output_files.extend(json_outputs)
+        return CompileResult("\n".join(lines) + "\n", summary, summarize_outputs(output_files))
+
+    raise CompileError("Unsupported plan shape")
