@@ -43,13 +43,37 @@ def test_pod_eval_manifest_dry_run() -> None:
     ]
 
 
-def test_pod_eval_dockerfile_is_lean_runpod_image() -> None:
+def test_pod_eval_dockerfile_uses_runpod_base() -> None:
     dockerfile = Path("Dockerfile.pod-eval").read_text(encoding="utf-8")
 
+    assert "ARG RUNPOD_BASE_IMAGE=runpod/pytorch:" in dockerfile
+    assert "FROM ${RUNPOD_BASE_IMAGE}" in dockerfile
+    assert "vllm/vllm-openai" not in dockerfile
+    assert "build-essential" in dockerfile
+    assert "iproute2" in dockerfile
+    assert "openssh-server" in dockerfile
+    assert "python3-venv" in dockerfile
+    assert "CC=/usr/bin/gcc" in dockerfile
     assert "WORKDIR /opt/nlsh" in dockerfile
     assert "HF_HOME=/workspace/hf-cache" in dockerfile
+    assert "TMPDIR=/workspace/tmp" in dockerfile
+    assert "TRITON_CACHE_DIR=/workspace/triton-cache" in dockerfile
+    assert "mkdir -p /workspace/hf-cache /workspace/tmp" in dockerfile
+    assert "chmod 1777 /workspace/tmp" in dockerfile
+    assert "POD_EVAL_VENV=/workspace/nlsh-venv" in dockerfile
     assert "python scripts/pod_eval.py download-models" not in dockerfile
     assert 'CMD ["bash", "scripts/runpod_pod_eval.sh"]' in dockerfile
+
+
+def test_runpod_startup_script_uses_volume_caches_and_base_services() -> None:
+    script = Path("scripts/runpod_pod_eval.sh").read_text(encoding="utf-8")
+
+    assert 'export TMPDIR="${TMPDIR:-${WORKSPACE_DIR}/tmp}"' in script
+    assert 'export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${WORKSPACE_DIR}/triton-cache}"' in script
+    assert 'export VLLM_CACHE_ROOT="${VLLM_CACHE_ROOT:-${WORKSPACE_DIR}/vllm-cache}"' in script
+    assert 'export CC="${CC:-/usr/bin/gcc}"' in script
+    assert '&& -x /start.sh' in script
+    assert "/start.sh &" in script
 
 
 def test_runpod_startup_script_syntax() -> None:
@@ -61,6 +85,13 @@ def test_runpod_startup_script_syntax() -> None:
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_pod_eval_manifest_uses_conservative_vllm_args() -> None:
+    manifest = json.loads(Path("configs/pod_eval_models.json").read_text(encoding="utf-8"))
+
+    assert "--enforce-eager" in manifest["defaults"]["vllm_args"]
+    assert "--disable-custom-all-reduce" in manifest["defaults"]["vllm_args"]
 
 
 def test_runpod_startup_requires_hf_token(tmp_path: Path) -> None:

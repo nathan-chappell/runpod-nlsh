@@ -106,7 +106,7 @@ def _slot_score(expected: dict[str, Any], actual: dict[str, Any]) -> tuple[int, 
     return correct, len(keys)
 
 
-def _tail_text(path: Path, line_count: int = 80) -> str:
+def _tail_text(path: Path, line_count: int = 220) -> str:
     if not path.exists():
         return ""
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -582,7 +582,7 @@ def run_with_optional_server(
                 startup_timeout=args.startup_timeout,
                 process=process,
             )
-        except Exception:
+        except Exception as exc:
             if process is not None:
                 stop_process(process)
             server_log_file.close()
@@ -590,6 +590,9 @@ def run_with_optional_server(
             if tail:
                 print("vLLM server log tail:", file=sys.stderr)
                 print(tail, file=sys.stderr)
+                raise VLLMStartupError(
+                    f"{exc}\n\nvLLM server log tail from {server_log_path}:\n{tail}"
+                ) from exc
             raise
         server_log_file.close()
     elif args.planner == "openai":

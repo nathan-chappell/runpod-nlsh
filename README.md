@@ -93,12 +93,14 @@ Evaluate against the seed dataset:
 
 ## Pod Eval
 
-The pod eval flow builds a lean image with the project, system tools, configs, and datasets. Model weights are downloaded at pod startup into Runpod persistent storage, so the Docker image stays small enough to push and pull normally.
+The pod eval flow builds on Runpod's PyTorch base image, adds the project, configs, datasets, system tools, and a compiler toolchain, then installs vLLM and model weights at pod startup into Runpod persistent storage. This keeps the pushed image from baking model weights while matching Runpod's GPU/CUDA environment.
 
 ```bash
 docker build -f Dockerfile.pod-eval -t YOUR_DOCKERHUB_USER/nlsh-pod-eval:latest .
 docker push YOUR_DOCKERHUB_USER/nlsh-pod-eval:latest
 ```
+
+The default base is `runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404`. To try another Runpod base, pass `--build-arg RUNPOD_BASE_IMAGE=...`.
 
 Create a Runpod pod with:
 
@@ -107,8 +109,9 @@ Create a Runpod pod with:
 - Persistent or network volume mounted at `/workspace`
 - `HF_TOKEN` set from a Runpod secret
 - Recommended volume size: at least 100 GB
+- Container disk: use 20 GB for the Runpod PyTorch base image. The model, vLLM, tmp, and cache data still live on `/workspace`, but the base image itself is large enough that 10 GB is likely too tight if Runpod counts image/root filesystem unpacking there.
 
-The image starts a full dev eval automatically. It downloads or reuses model weights in `/workspace/hf-cache`, writes reports to `/workspace/nlsh-artifacts`, records the final code in `/workspace/nlsh-artifacts/last_exit_code`, and then keeps the container alive for inspection. Set `POD_EVAL_EXIT_AFTER=1` to exit after the batch instead.
+The image starts Runpod's base services when `/start.sh` is present, then starts a full dev eval automatically. On first boot it creates `/workspace/nlsh-venv`, installs vLLM there, downloads or reuses model weights in `/workspace/hf-cache`, keeps temp/Triton/vLLM caches under `/workspace`, writes reports to `/workspace/nlsh-artifacts`, records the final code in `/workspace/nlsh-artifacts/last_exit_code`, and then keeps the container alive for inspection. Set `POD_EVAL_EXIT_AFTER=1` to exit after the batch instead.
 
 Optional runtime knobs:
 
@@ -116,6 +119,8 @@ Optional runtime knobs:
 POD_EVAL_LIMIT=2
 POD_EVAL_TIMEOUT=90
 POD_EVAL_STARTUP_TIMEOUT=900
+POD_EVAL_VLLM_SPEC=vllm
+POD_EVAL_START_RUNPOD_SERVICES=1
 ```
 
 You can also run commands manually in the pod:

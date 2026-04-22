@@ -4,7 +4,10 @@
     "max_num_seqs": 1,
     "gpu_memory_utilization": 0.85,
     "generation_config": "vllm",
-    "vllm_args": []
+    "vllm_args": [
+      "--enforce-eager",
+      "--disable-custom-all-reduce"
+    ]
   },
   "models": [
     {
