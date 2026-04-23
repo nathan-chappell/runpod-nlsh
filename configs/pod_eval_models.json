@@ -1,13 +1,9 @@
 {
   "defaults": {
-    "max_model_len": 4096,
-    "max_num_seqs": 1,
-    "gpu_memory_utilization": 0.85,
-    "generation_config": "vllm",
-    "vllm_args": [
-      "--enforce-eager",
-      "--disable-custom-all-reduce"
-    ]
+    "context_length": 4096,
+    "max_running_requests": 1,
+    "mem_fraction_static": 0.85,
+    "sglang_args": []
   },
   "models": [
     {

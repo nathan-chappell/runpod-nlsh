@@ -52,44 +52,23 @@ def _load_dotenv(path: Path = Path(".env")) -> None:
             os.environ[key] = value
 
 
-def _env_bool(name: str) -> bool | None:
-    raw_value = os.environ.get(name)
-    if raw_value is None:
-        return None
-    normalized = raw_value.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    raise ValueError(f"{name} must be one of: 1, 0, true, false, yes, no, on, off")
-
-
 @dataclass(slots=True)
 class PlannerConfig:
     model: str
     base_url: str
     api_key: str
     request_timeout: float
-    force_vllm_like: bool | None = None
 
     @classmethod
     def from_env(cls) -> "PlannerConfig":
         _load_dotenv()
         api_key = os.environ.get("NLSH_API_KEY") or os.environ.get("HF_TOKEN") or ""
-        force_vllm_like = _env_bool("NLSH_VLLM_LIKE")
         return cls(
             model=os.environ.get("NLSH_MODEL", "microsoft/Phi-4-mini-instruct"),
             base_url=os.environ.get("NLSH_BASE_URL", "https://router.huggingface.co/v1"),
             api_key=api_key,
             request_timeout=float(os.environ.get("NLSH_REQUEST_TIMEOUT", "60")),
-            force_vllm_like=force_vllm_like,
         )
-
-    def is_vllm_like(self) -> bool:
-        if self.force_vllm_like is not None:
-            return self.force_vllm_like
-        lowered = self.base_url.lower()
-        return "runpod.ai" in lowered or "/openai/v1" in lowered or "vllm" in lowered
 
 
 def _extract_message_text(message: object) -> str:
@@ -290,29 +269,16 @@ class OpenAIPlanner:
         prompt: str,
         response_format: dict[str, Any],
     ) -> dict[str, Any]:
-        is_vllm_like = self.config.is_vllm_like()
-        prompt_text = developer_prompt
-        if is_vllm_like and response_format.get("type") == "json_schema":
-            schema = response_format.get("json_schema", {}).get("schema")
-            prompt_text = f"{developer_prompt}\n\nJSON schema:\n{json.dumps(schema, ensure_ascii=False)}"
-        kwargs: dict[str, Any] = {
+        return {
             "model": self.config.model,
             "temperature": 0,
-            "max_completion_tokens": 600,
+            "max_tokens": 600,
             "messages": [
-                {"role": "system", "content": prompt_text},
+                {"role": "system", "content": developer_prompt},
                 {"role": "user", "content": prompt},
             ],
             "response_format": response_format,
         }
-        if is_vllm_like:
-            kwargs.pop("max_completion_tokens", None)
-            kwargs["max_tokens"] = 500
-            kwargs["response_format"] = {"type": "json_object"}
-            kwargs["extra_body"] = {
-                "chat_template_kwargs": {"enable_thinking": False},
-            }
-        return kwargs
 
     def _repair_payload(
         self,

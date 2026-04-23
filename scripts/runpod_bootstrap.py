@@ -30,19 +30,16 @@ def _log(message: str = "") -> None:
 def _ensure_workspace() -> None:
     cache_paths = {
         "HF_HOME": WORKSPACE_DIR / "hf-cache",
+        "SGLANG_STORAGE_PATH": WORKSPACE_DIR / "sglang-storage",
         "TMPDIR": WORKSPACE_DIR / "tmp",
         "TRANSFORMERS_CACHE": WORKSPACE_DIR / "hf-cache",
         "TRITON_CACHE_DIR": WORKSPACE_DIR / "triton-cache",
-        "VLLM_CACHE_ROOT": WORKSPACE_DIR / "vllm-cache",
         "XDG_CACHE_HOME": WORKSPACE_DIR / ".cache",
     }
     ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
     for key, default_path in cache_paths.items():
         path = Path(os.environ.setdefault(key, str(default_path)))
         path.mkdir(parents=True, exist_ok=True)
-    os.environ.setdefault("NLSH_VLLM_LIKE", "1")
-    os.environ.setdefault("VLLM_USE_V1", "0")
-    os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
     os.environ.setdefault("CC", "/usr/bin/gcc")
     os.environ.setdefault("CXX", "/usr/bin/g++")
 

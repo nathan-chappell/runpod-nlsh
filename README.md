@@ -11,7 +11,7 @@
 - Python helpers for CSV-to-JSON conversion and simple PDF text search
 - Coverage-organized message dataset for fine-tuning and eval
 - A starter Axolotl config for `microsoft/Phi-4-mini-instruct` LoRA
-- A pod eval image and manifest for sequential vLLM model comparisons plus a direct Phi-4 LoRA run
+- A pod eval image and manifest for sequential SGLang model comparisons plus a direct Phi-4 LoRA run
 
 ## Supported Actions
 
@@ -97,25 +97,25 @@ The pod eval and fine-tuning flow builds on Runpod's PyTorch base image and inst
 
 ```bash
 docker build -f Dockerfile.pod-eval \
-  -t YOUR_DOCKERHUB_USER/runpod-nlsh:1.7 \
+  -t YOUR_DOCKERHUB_USER/runpod-nlsh:0.2.0 \
   -t YOUR_DOCKERHUB_USER/runpod-nlsh:latest .
-docker push YOUR_DOCKERHUB_USER/runpod-nlsh:1.7
+docker push YOUR_DOCKERHUB_USER/runpod-nlsh:0.2.0
 docker push YOUR_DOCKERHUB_USER/runpod-nlsh:latest
 ```
 
 The default base is `runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404`. To try another Runpod base, pass `--build-arg RUNPOD_BASE_IMAGE=...`.
-`requirements/pod-vllm.txt` intentionally pins `vllm==0.16.0` so the image stays on the base layer's Torch 2.9.1; newer `vllm` wheels require Torch 2.10.0 and would make `pip` download and replace Torch during `docker build`.
+`requirements/pod-sglang.txt` pins `sglang==0.5.10.post1` and `sglang-kernel==0.4.1` so the image stays aligned with the base layer's Torch 2.9.1 and can reuse the PyTorch already bundled in the Runpod image.
 
 Create a Runpod pod with:
 
 - GPU: RTX 4090 or another 32 GB+ GPU
-- Image: `YOUR_DOCKERHUB_USER/runpod-nlsh:1.7`
+- Image: `YOUR_DOCKERHUB_USER/runpod-nlsh:0.2.0`
 - Persistent or network volume mounted at `/workspace`
 - `HF_TOKEN` set from a Runpod secret
 - Recommended volume size: at least 100 GB
-- Container disk: use 20 GB for the Runpod PyTorch base image. The model, vLLM, tmp, and cache data still live on `/workspace`, but the base image itself is large enough that 10 GB is likely too tight if Runpod counts image/root filesystem unpacking there.
+- Container disk: use 20 GB for the Runpod PyTorch base image. The model, SGLang, tmp, and cache data still live on `/workspace`, but the base image itself is large enough that 10 GB is likely too tight if Runpod counts image/root filesystem unpacking there.
 
-The container `CMD` is `["python", "scripts/runpod_bootstrap.py"]`. Heavy Python dependencies are baked into the image from `requirements/pod-core.txt`, `requirements/pod-train.txt`, and `requirements/pod-vllm.txt`, and `nlsh` itself is installed into the image Python during the build. The bootstrap stays stdlib-only, creates cache and artifact directories under `/workspace`, starts Runpod base services by default, and then execs `python -m nlsh.pod_workflow run`. Normal pod startup should not need any runtime `pip install`, and `/workspace` should only hold models, caches, checkpoints, and artifacts.
+The container `CMD` is `["python", "scripts/runpod_bootstrap.py"]`. Heavy Python dependencies are baked into the image from `requirements/pod-core.txt`, `requirements/pod-train.txt`, and `requirements/pod-sglang.txt`, and `nlsh` itself is installed into the image Python during the build. The bootstrap stays stdlib-only, creates cache and artifact directories under `/workspace`, starts Runpod base services by default, and then execs `python -m nlsh.pod_workflow run`. Normal pod startup should not need any runtime `pip install`, and `/workspace` should only hold models, caches, checkpoints, and artifacts.
 
 The Typer workflow logs the resolved configuration and execution plan, then:
 
@@ -123,7 +123,7 @@ The Typer workflow logs the resolved configuration and execution plan, then:
 2. starts all manifest model downloads in parallel
 3. evaluates models in priority order as each preferred model is ready: Phi-4, SmolLM3, then Qwen3
 4. fine-tunes Phi-4-mini with `scripts/phi_4_training.py`
-5. serves the trained adapter with vLLM LoRA support and re-evaluates the fine-tuned Phi-4 adapter
+5. serves the trained adapter with SGLang LoRA support and re-evaluates the fine-tuned Phi-4 adapter
 
 Baseline evals and training now keep incremental state on disk so a failure does not erase the run history. The workflow writes `/workspace/nlsh-artifacts/workflow_state.json`; each model eval writes `run_state.json`, `report.json`, and `eval.log`; OOM retries preserve prior attempt artifacts as `*.attempt-N.*`; and training writes `training_state.json` plus regular checkpoints under the output directory. Reports go to `/workspace/nlsh-artifacts`, the adapter goes to `/workspace/nlsh-finetune/phi-4-mini-instruct-lora`, and exit codes are recorded in `/workspace/nlsh-artifacts/last_eval_exit_code`, `/workspace/nlsh-artifacts/last_training_exit_code`, `/workspace/nlsh-artifacts/last_post_training_eval_exit_code`, and `/workspace/nlsh-artifacts/last_exit_code`. Set `POD_EVAL_EXIT_AFTER=1` to exit after the batch instead of keeping the container alive for inspection.
 
@@ -154,7 +154,7 @@ python scripts/pod_eval.py run-suite --dataset data/samples
 python -m nlsh.pod_workflow run --dry-run
 ```
 
-The manifest is `configs/pod_eval_models.json`. It currently evaluates `microsoft/Phi-4-mini-instruct`, `HuggingFaceTB/SmolLM3-3B`, and `Qwen/Qwen3-8B` through vLLM with conservative single-GPU settings. Downloads run in parallel; eval stays sequential in the preferred order so one GPU is used predictably. If a vLLM startup or serve attempt fails with an OOM, `scripts/pod_eval.py` retries with smaller `max_num_seqs`, then shorter `max_model_len`, then lower `gpu_memory_utilization` until it hits the configured floor. If training hits an OOM, `scripts/phi_4_training.py` retries with smaller batch sizes, then shorter sequence length, resuming from the latest checkpoint when one exists.
+The manifest is `configs/pod_eval_models.json`. It currently evaluates `microsoft/Phi-4-mini-instruct`, `HuggingFaceTB/SmolLM3-3B`, and `Qwen/Qwen3-8B` through SGLang with conservative single-GPU settings. Downloads run in parallel; eval stays sequential in the preferred order so one GPU is used predictably. If an SGLang startup or serve attempt fails with an OOM, `scripts/pod_eval.py` retries with smaller `max_running_requests`, then shorter `context_length`, then lower `mem_fraction_static` until it hits the configured floor. If training hits an OOM, `scripts/phi_4_training.py` retries with smaller batch sizes, then shorter sequence length, resuming from the latest checkpoint when one exists.
 
 For local non-GPU checks, validate the manifest and exercise the eval path with the gold planner:
 

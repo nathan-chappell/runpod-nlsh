@@ -1,3 +1,0 @@
-# Keep this aligned with the default Runpod torch291 base image.
-# vLLM 0.17+ requires torch==2.10.0 and triggers a large torch reinstall at build time.
-vllm==0.16.0

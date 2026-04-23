@@ -114,10 +114,10 @@ class WorkflowConfig:
         if item.strip()
     ))
     eval_args: tuple[str, ...] = field(default_factory=lambda: tuple(shlex.split(os.environ.get("POD_EVAL_EVAL_ARGS", ""))))
-    vllm_args: tuple[str, ...] = field(default_factory=lambda: tuple(shlex.split(os.environ.get("POD_EVAL_VLLM_ARGS", ""))))
+    sglang_args: tuple[str, ...] = field(default_factory=lambda: tuple(shlex.split(os.environ.get("POD_EVAL_SGLANG_ARGS", ""))))
     train_args: tuple[str, ...] = field(default_factory=lambda: tuple(shlex.split(os.environ.get("POD_EVAL_TRAIN_ARGS", ""))))
-    post_training_vllm_args: tuple[str, ...] = field(default_factory=lambda: tuple(
-        shlex.split(os.environ.get("POD_EVAL_POST_TRAINING_VLLM_ARGS", ""))
+    post_training_sglang_args: tuple[str, ...] = field(default_factory=lambda: tuple(
+        shlex.split(os.environ.get("POD_EVAL_POST_TRAINING_SGLANG_ARGS", ""))
     ))
 
 
@@ -191,16 +191,16 @@ class Workflow:
             "exit_after": self.config.exit_after,
             "model_order": list(self.config.model_order),
             "eval_args": list(self.config.eval_args),
-            "vllm_args": list(self.config.vllm_args),
+            "sglang_args": list(self.config.sglang_args),
             "train_args": list(self.config.train_args),
-            "post_training_vllm_args": list(self.config.post_training_vllm_args),
+            "post_training_sglang_args": list(self.config.post_training_sglang_args),
         }
 
     def _log_configuration(self) -> None:
         self.logger.info("nlsh Runpod Typer workflow starting")
         for key, value in self._config_payload().items():
             self.logger.info("config.%s=%s", key, value)
-        self.logger.info("execution plan: parallel downloads -> priority-gated eval -> Phi-4 fine-tune -> adapter eval")
+        self.logger.info("execution plan: parallel downloads -> priority-gated eval -> Phi-4 fine-tune -> SGLang adapter eval")
 
     def _write_state(self) -> None:
         with self.state_lock:
@@ -336,7 +336,7 @@ class Workflow:
         output_dir: Path,
         log_name: str,
         request_model: str | None = None,
-        extra_vllm_args: tuple[str, ...] = (),
+        extra_sglang_args: tuple[str, ...] = (),
     ) -> int:
         command = [
             sys.executable,
@@ -362,8 +362,8 @@ class Workflow:
         if request_model is not None:
             command.extend(["--request-model", request_model])
         command.extend(self.config.eval_args)
-        for arg in (*self.config.vllm_args, *extra_vllm_args):
-            command.append(f"--vllm-arg={arg}")
+        for arg in (*self.config.sglang_args, *extra_sglang_args):
+            command.append(f"--sglang-arg={arg}")
         return run_logged_command(command, self.config.artifact_dir / log_name, self.logger, cwd=self.config.app_dir)
 
     def _run_training(self) -> int:
@@ -433,12 +433,12 @@ class Workflow:
             base_model,
             output_dir=self.config.artifact_dir / "post-training-eval",
             log_name="post_training_eval.log",
-            request_model=POST_TRAINING_ADAPTER_NAME,
-            extra_vllm_args=(
+            request_model=f"{base_model.id}:{POST_TRAINING_ADAPTER_NAME}",
+            extra_sglang_args=(
                 "--enable-lora",
-                "--lora-modules",
+                "--lora-paths",
                 lora_arg,
-                *self.config.post_training_vllm_args,
+                *self.config.post_training_sglang_args,
             ),
         )
         self._write_post_training_summary(base_model, status)
@@ -453,7 +453,7 @@ class Workflow:
         summary = {
             "status": "completed" if status == 0 else "failed",
             "base_model": base_model.id,
-            "adapter_model": POST_TRAINING_ADAPTER_NAME,
+            "adapter_model": f"{base_model.id}:{POST_TRAINING_ADAPTER_NAME}",
             "adapter_path": str(self.config.train_output_dir),
             "baseline_report": str(baseline_report),
             "adapter_report": str(adapter_report),

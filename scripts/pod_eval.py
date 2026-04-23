@@ -38,7 +38,7 @@ OOM_TEXT_PATTERNS = (
 )
 
 
-class VLLMStartupError(RuntimeError):
+class ServerStartupError(RuntimeError):
     pass
 
 
@@ -56,7 +56,7 @@ def _non_negative_int(raw: str) -> int:
     return value
 
 
-def _gpu_memory_utilization(raw: str) -> float:
+def _mem_fraction_static(raw: str) -> float:
     value = float(raw)
     if value <= 0 or value > 1:
         raise argparse.ArgumentTypeError("value must be > 0 and <= 1")
@@ -68,11 +68,10 @@ class ModelSpec:
     id: str
     display_name: str
     trust_remote_code: bool
-    max_model_len: int
-    max_num_seqs: int
-    gpu_memory_utilization: float
-    generation_config: str
-    vllm_args: tuple[str, ...]
+    context_length: int
+    max_running_requests: int
+    mem_fraction_static: float
+    sglang_args: tuple[str, ...]
 
     @property
     def slug(self) -> str:
@@ -220,17 +219,16 @@ def load_manifest(path: Path) -> list[ModelSpec]:
                     value("trust_remote_code", False),
                     f"models[{index}].trust_remote_code",
                 ),
-                max_model_len=_expect_int(value("max_model_len", 4096), f"models[{index}].max_model_len"),
-                max_num_seqs=_expect_int(value("max_num_seqs", 1), f"models[{index}].max_num_seqs"),
-                gpu_memory_utilization=_expect_float(
-                    value("gpu_memory_utilization", 0.85),
-                    f"models[{index}].gpu_memory_utilization",
+                context_length=_expect_int(value("context_length", 4096), f"models[{index}].context_length"),
+                max_running_requests=_expect_int(
+                    value("max_running_requests", 1),
+                    f"models[{index}].max_running_requests",
                 ),
-                generation_config=_expect_string(
-                    value("generation_config", "vllm"),
-                    f"models[{index}].generation_config",
+                mem_fraction_static=_expect_float(
+                    value("mem_fraction_static", 0.85),
+                    f"models[{index}].mem_fraction_static",
                 ),
-                vllm_args=_expect_string_tuple(value("vllm_args", []), f"models[{index}].vllm_args"),
+                sglang_args=_expect_string_tuple(value("sglang_args", []), f"models[{index}].sglang_args"),
             )
         )
     return specs
@@ -249,7 +247,7 @@ def find_model(specs: list[ModelSpec], selector: str) -> ModelSpec:
     raise ValueError(f"Ambiguous model selector {selector!r}")
 
 
-def _vllm_command(
+def _sglang_command(
     spec: ModelSpec,
     *,
     host: str,
@@ -259,68 +257,70 @@ def _vllm_command(
     command = [
         sys.executable,
         "-m",
-        "vllm.entrypoints.openai.api_server",
+        "sglang.launch_server",
         "--host",
         host,
         "--port",
         str(port),
-        "--model",
+        "--model-path",
         spec.id,
-        "--max-model-len",
-        str(spec.max_model_len),
-        "--max-num-seqs",
-        str(spec.max_num_seqs),
-        "--gpu-memory-utilization",
-        str(spec.gpu_memory_utilization),
-        "--generation-config",
-        spec.generation_config,
+        "--served-model-name",
+        spec.id,
+        "--context-length",
+        str(spec.context_length),
+        "--max-running-requests",
+        str(spec.max_running_requests),
+        "--mem-fraction-static",
+        str(spec.mem_fraction_static),
+        "--file-storage-path",
+        os.environ.get("SGLANG_STORAGE_PATH", "/workspace/sglang-storage"),
     ]
     if spec.trust_remote_code:
         command.append("--trust-remote-code")
-    command.extend(spec.vllm_args)
+    command.extend(spec.sglang_args)
     command.extend(extra_args)
     return command
 
 
 def _apply_spec_overrides(spec: ModelSpec, args: argparse.Namespace) -> ModelSpec:
     updated = spec
-    if args.max_model_len is not None:
-        updated = replace(updated, max_model_len=args.max_model_len)
-    if args.max_num_seqs is not None:
-        updated = replace(updated, max_num_seqs=args.max_num_seqs)
-    if args.gpu_memory_utilization is not None:
-        updated = replace(updated, gpu_memory_utilization=args.gpu_memory_utilization)
+    if args.context_length is not None:
+        updated = replace(updated, context_length=args.context_length)
+    if args.max_running_requests is not None:
+        updated = replace(updated, max_running_requests=args.max_running_requests)
+    if args.mem_fraction_static is not None:
+        updated = replace(updated, mem_fraction_static=args.mem_fraction_static)
     return updated
 
 
 def _reduce_spec_for_oom(
     spec: ModelSpec,
     *,
-    min_max_model_len: int,
-    min_gpu_memory_utilization: float,
+    min_context_length: int,
+    min_mem_fraction_static: float,
 ) -> tuple[ModelSpec | None, dict[str, dict[str, int | float]]]:
     changes: dict[str, dict[str, int | float]] = {}
     updated = spec
 
-    if updated.max_num_seqs > 1:
-        next_max_num_seqs = max(1, updated.max_num_seqs // 2)
-        if next_max_num_seqs < updated.max_num_seqs:
-            changes["max_num_seqs"] = {"from": updated.max_num_seqs, "to": next_max_num_seqs}
-            updated = replace(updated, max_num_seqs=next_max_num_seqs)
+    if updated.max_running_requests > 1:
+        next_max_running_requests = max(1, updated.max_running_requests // 2)
+        if next_max_running_requests < updated.max_running_requests:
+            changes["max_running_requests"] = {"from": updated.max_running_requests, "to": next_max_running_requests}
+            updated = replace(updated, max_running_requests=next_max_running_requests)
 
-    if updated.max_model_len > min_max_model_len:
-        next_max_model_len = max(min_max_model_len, updated.max_model_len // 2)
-        if next_max_model_len < updated.max_model_len:
-            changes["max_model_len"] = {"from": updated.max_model_len, "to": next_max_model_len}
-            updated = replace(updated, max_model_len=next_max_model_len)
+    if updated.context_length > min_context_length:
+        next_context_length = max(min_context_length, updated.context_length // 2)
+        if next_context_length < updated.context_length:
+            changes["context_length"] = {"from": updated.context_length, "to": next_context_length}
+            updated = replace(updated, context_length=next_context_length)
 
-    next_gpu_memory_utilization = round(max(min_gpu_memory_utilization, updated.gpu_memory_utilization - 0.05), 2)
-    if next_gpu_memory_utilization < updated.gpu_memory_utilization:
-        changes["gpu_memory_utilization"] = {
-            "from": updated.gpu_memory_utilization,
-            "to": next_gpu_memory_utilization,
+    next_mem_fraction_static = round(max(min_mem_fraction_static, updated.mem_fraction_static - 0.05), 2)
+    if next_mem_fraction_static < updated.mem_fraction_static:
+        changes["mem_fraction_static"] = {
+            "from": updated.mem_fraction_static,
+            "to": next_mem_fraction_static,
         }
-        updated = replace(updated, gpu_memory_utilization=next_gpu_memory_utilization)
+        updated = replace(updated, mem_fraction_static=next_mem_fraction_static)
 
     return (updated if changes else None), changes
 
@@ -348,8 +348,8 @@ def wait_for_models(
 
     while time.monotonic() < deadline:
         if process is not None and process.poll() is not None:
-            raise VLLMStartupError(
-                f"vLLM exited before serving {url} with exit code {process.returncode}"
+            raise ServerStartupError(
+                f"SGLang exited before serving {url} with exit code {process.returncode}"
             )
         try:
             headers = {"Accept": "application/json"}
@@ -366,7 +366,7 @@ def wait_for_models(
         time.sleep(2)
 
     detail = f"; last error: {last_error}" if last_error else ""
-    raise VLLMStartupError(f"Timed out after {startup_timeout:.0f}s waiting for {url}{detail}")
+    raise ServerStartupError(f"Timed out after {startup_timeout:.0f}s waiting for {url}{detail}")
 
 
 def stop_process(process: subprocess.Popen[Any]) -> None:
@@ -455,7 +455,6 @@ def _make_planner(
         base_url=base_url,
         api_key=api_key,
         request_timeout=request_timeout,
-        force_vllm_like=True,
     )
     return OpenAIPlanner(config)
 
@@ -500,11 +499,10 @@ def evaluate_model(
             "id": spec.id,
             "display_name": spec.display_name,
             "trust_remote_code": spec.trust_remote_code,
-            "max_model_len": spec.max_model_len,
-            "max_num_seqs": spec.max_num_seqs,
-            "gpu_memory_utilization": spec.gpu_memory_utilization,
-            "generation_config": spec.generation_config,
-            "vllm_args": list(spec.vllm_args),
+            "context_length": spec.context_length,
+            "max_running_requests": spec.max_running_requests,
+            "mem_fraction_static": spec.mem_fraction_static,
+            "sglang_args": list(spec.sglang_args),
         },
         "request_model": request_model or spec.id,
         "count": len(records),
@@ -658,16 +656,16 @@ def run_with_optional_server(
     for attempt in range(1, args.oom_retries + 2):
         process: subprocess.Popen[Any] | None = None
         base_url = args.base_url
-        server_log_path = model_dir / "vllm-server.log"
+        server_log_path = model_dir / "sglang-server.log"
         attempt_state: dict[str, Any] = {
             "attempt": attempt,
             "started_at": _utc_now(),
             "status": "running",
             "model": {
                 "id": current_spec.id,
-                "max_model_len": current_spec.max_model_len,
-                "max_num_seqs": current_spec.max_num_seqs,
-                "gpu_memory_utilization": current_spec.gpu_memory_utilization,
+                "context_length": current_spec.context_length,
+                "max_running_requests": current_spec.max_running_requests,
+                "mem_fraction_static": current_spec.mem_fraction_static,
             },
             "server_log_path": str(server_log_path),
             "report_path": str(model_dir / "report.json"),
@@ -677,13 +675,13 @@ def run_with_optional_server(
 
         try:
             if args.planner == "openai" and base_url is None:
-                command = _vllm_command(
+                command = _sglang_command(
                     current_spec,
                     host=args.host,
                     port=args.port,
-                    extra_args=args.vllm_arg or [],
+                    extra_args=args.sglang_arg or [],
                 )
-                print(f"starting vLLM for {current_spec.id}", flush=True)
+                print(f"starting SGLang for {current_spec.id}", flush=True)
                 print(" ".join(command), flush=True)
                 with server_log_path.open("w", encoding="utf-8") as server_log_file:
                     process = subprocess.Popen(
@@ -746,8 +744,8 @@ def run_with_optional_server(
             if can_retry:
                 next_spec, changes = _reduce_spec_for_oom(
                     current_spec,
-                    min_max_model_len=args.min_max_model_len,
-                    min_gpu_memory_utilization=args.min_gpu_memory_utilization,
+                    min_context_length=args.min_context_length,
+                    min_mem_fraction_static=args.min_mem_fraction_static,
                 )
                 if next_spec is not None:
                     attempt_state["status"] = "retrying"
@@ -767,7 +765,7 @@ def run_with_optional_server(
                     if eval_log_path.exists():
                         eval_log_path.replace(model_dir / f"eval.attempt-{attempt}.log")
                     if server_log_path.exists():
-                        server_log_path.replace(model_dir / f"vllm-server.attempt-{attempt}.log")
+                        server_log_path.replace(model_dir / f"sglang-server.attempt-{attempt}.log")
                     current_spec = next_spec
                     continue
 
@@ -775,7 +773,7 @@ def run_with_optional_server(
             state["finished_at"] = attempt_state["finished_at"]
             _write_json(state_path, state)
             if tail:
-                print("vLLM server log tail:", file=sys.stderr)
+                print("SGLang server log tail:", file=sys.stderr)
                 print(tail, file=sys.stderr)
             raise
         finally:
@@ -823,7 +821,7 @@ def command_download_models(args: argparse.Namespace) -> int:
     try:
         from huggingface_hub import snapshot_download
     except ImportError as exc:
-        raise RuntimeError("download-models requires huggingface_hub, which is included in vLLM images") from exc
+        raise RuntimeError("download-models requires huggingface_hub, which is included in pod images") from exc
 
     for spec in specs:
         print(f"downloading {spec.id}", flush=True)
@@ -840,7 +838,7 @@ def _add_eval_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--planner", choices=["openai", "gold"], default="openai")
-    parser.add_argument("--base-url", help="Use an already-running OpenAI-compatible endpoint instead of starting vLLM.")
+    parser.add_argument("--base-url", help="Use an already-running OpenAI-compatible endpoint instead of starting SGLang.")
     parser.add_argument(
         "--request-model",
         help="Model name to send in planner requests when it differs from the manifest base model.",
@@ -848,46 +846,46 @@ def _add_eval_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--api-key", default=DEFAULT_API_KEY)
     parser.add_argument("--timeout", type=float, default=90.0, help="Per-row OpenAI request timeout in seconds.")
     parser.add_argument("--startup-timeout", type=float, default=900.0, help="Seconds to wait for /v1/models.")
-    parser.add_argument("--host", default="0.0.0.0", help="vLLM bind host.")
-    parser.add_argument("--port", type=int, default=8000, help="vLLM port.")
+    parser.add_argument("--host", default="0.0.0.0", help="SGLang bind host.")
+    parser.add_argument("--port", type=int, default=8000, help="SGLang port.")
     parser.add_argument("--python-executable", default=sys.executable)
     parser.add_argument(
         "--oom-retries",
         type=_non_negative_int,
         default=3,
-        help="Retry count after vLLM/model OOM with reduced serving settings.",
+        help="Retry count after SGLang/model OOM with reduced serving settings.",
     )
     parser.add_argument(
-        "--min-max-model-len",
+        "--min-context-length",
         type=_positive_int,
         default=512,
-        help="Lower bound when shrinking --max-model-len after OOM.",
+        help="Lower bound when shrinking --context-length after OOM.",
     )
     parser.add_argument(
-        "--min-gpu-memory-utilization",
-        type=_gpu_memory_utilization,
+        "--min-mem-fraction-static",
+        type=_mem_fraction_static,
         default=0.55,
-        help="Lower bound when shrinking --gpu-memory-utilization after OOM.",
+        help="Lower bound when shrinking --mem-fraction-static after OOM.",
     )
     parser.add_argument(
-        "--max-model-len",
+        "--context-length",
         type=_positive_int,
-        help="Override manifest max model length for this run.",
+        help="Override manifest context length for this run.",
     )
     parser.add_argument(
-        "--max-num-seqs",
+        "--max-running-requests",
         type=_positive_int,
-        help="Override manifest max concurrent sequences for this run.",
+        help="Override manifest max concurrent requests for this run.",
     )
     parser.add_argument(
-        "--gpu-memory-utilization",
-        type=_gpu_memory_utilization,
-        help="Override manifest GPU memory utilization for this run.",
+        "--mem-fraction-static",
+        type=_mem_fraction_static,
+        help="Override manifest static GPU memory fraction for this run.",
     )
     parser.add_argument(
-        "--vllm-arg",
+        "--sglang-arg",
         action="append",
-        help="Additional single vLLM server argument. Repeat for multiple arguments.",
+        help="Additional single SGLang server argument. Repeat for multiple arguments.",
     )
 
 
@@ -919,13 +917,13 @@ def command_run_suite(args: argparse.Namespace) -> int:
             report = run_with_optional_server(spec=spec, args=args)
             summary["models"].append(_report_summary(report))
             _write_json(summary_path, summary)
-        except VLLMStartupError as exc:
+        except ServerStartupError as exc:
             summary["models"].append({
                 "id": spec.id,
                 "display_name": spec.display_name,
-                "status": "vllm_start_failed",
+                "status": "server_start_failed",
                 "error": str(exc),
-                "server_log_path": str(args.output_dir / spec.slug / "vllm-server.log"),
+                "server_log_path": str(args.output_dir / spec.slug / "sglang-server.log"),
             })
             summary["finished_at"] = _utc_now()
             _write_json(summary_path, summary)
@@ -941,7 +939,7 @@ def command_run_suite(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="scripts/pod_eval.py",
-        description="Run the dev NLSH eval against local vLLM OpenAI-compatible model servers.",
+        description="Run the dev NLSH eval against local SGLang OpenAI-compatible model servers.",
     )
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     subparsers = parser.add_subparsers(dest="command", required=True)

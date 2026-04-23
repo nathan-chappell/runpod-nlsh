@@ -7,12 +7,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CC=/usr/bin/gcc \
     CXX=/usr/bin/g++ \
     HF_HOME=/workspace/hf-cache \
+    SGLANG_STORAGE_PATH=/workspace/sglang-storage \
     TMPDIR=/workspace/tmp \
     TRANSFORMERS_CACHE=/workspace/hf-cache \
     TRITON_CACHE_DIR=/workspace/triton-cache \
-    VLLM_CACHE_ROOT=/workspace/vllm-cache \
     XDG_CACHE_HOME=/workspace/.cache \
-    NLSH_VLLM_LIKE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONUNBUFFERED=1
 
@@ -20,7 +19,7 @@ WORKDIR /opt/nlsh
 
 COPY requirements ./requirements
 
-RUN mkdir -p /workspace/hf-cache /workspace/tmp /workspace/triton-cache /workspace/vllm-cache /workspace/.cache \
+RUN mkdir -p /workspace/hf-cache /workspace/sglang-storage /workspace/tmp /workspace/triton-cache /workspace/.cache \
     && chmod 1777 /workspace/tmp \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -44,7 +43,7 @@ RUN mkdir -p /workspace/hf-cache /workspace/tmp /workspace/triton-cache /workspa
 RUN --mount=type=cache,target=/root/.cache/pip python -m pip install --upgrade pip setuptools wheel
 RUN --mount=type=cache,target=/root/.cache/pip python -m pip install -r requirements/pod-core.txt
 RUN --mount=type=cache,target=/root/.cache/pip python -m pip install -r requirements/pod-train.txt
-RUN --mount=type=cache,target=/root/.cache/pip python -m pip install -r requirements/pod-vllm.txt
+RUN --mount=type=cache,target=/root/.cache/pip python -m pip install -r requirements/pod-sglang.txt
 
 COPY pyproject.toml README.md ./
 COPY src ./src

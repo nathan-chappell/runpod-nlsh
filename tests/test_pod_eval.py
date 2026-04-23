@@ -71,9 +71,9 @@ def test_pod_eval_run_model_help_includes_oom_controls() -> None:
 
     assert result.returncode == 0
     assert "--oom-retries" in result.stdout
-    assert "--min-max-model-len" in result.stdout
-    assert "--max-model-len" in result.stdout
-    assert "--gpu-memory-utilization" in result.stdout
+    assert "--min-context-length" in result.stdout
+    assert "--context-length" in result.stdout
+    assert "--mem-fraction-static" in result.stdout
 
 
 def test_pod_eval_manifest_dry_run() -> None:
@@ -106,16 +106,17 @@ def test_pod_eval_dockerfile_uses_runpod_base() -> None:
 
     assert "ARG RUNPOD_BASE_IMAGE=runpod/pytorch:" in dockerfile
     assert "FROM ${RUNPOD_BASE_IMAGE}" in dockerfile
-    assert "vllm/vllm-openai" not in dockerfile
+    assert "requirements/pod-sglang.txt" in dockerfile
     assert "build-essential" in dockerfile
     assert "iproute2" in dockerfile
     assert "openssh-client" in dockerfile
     assert "CC=/usr/bin/gcc" in dockerfile
     assert "WORKDIR /opt/nlsh" in dockerfile
     assert "HF_HOME=/workspace/hf-cache" in dockerfile
+    assert "SGLANG_STORAGE_PATH=/workspace/sglang-storage" in dockerfile
     assert "TMPDIR=/workspace/tmp" in dockerfile
     assert "TRITON_CACHE_DIR=/workspace/triton-cache" in dockerfile
-    assert "mkdir -p /workspace/hf-cache /workspace/tmp" in dockerfile
+    assert "mkdir -p /workspace/hf-cache /workspace/sglang-storage /workspace/tmp" in dockerfile
     assert "chmod 1777 /workspace/tmp" in dockerfile
     assert "POD_EVAL_IMAGE_VENV" not in dockerfile
     assert "POD_EVAL_VENV" not in dockerfile
@@ -128,7 +129,7 @@ def test_pod_eval_dockerfile_uses_runpod_base() -> None:
     assert "python -m pip install --upgrade pip setuptools wheel" in dockerfile
     assert "requirements/pod-core.txt" in dockerfile
     assert "requirements/pod-train.txt" in dockerfile
-    assert "requirements/pod-vllm.txt" in dockerfile
+    assert "requirements/pod-sglang.txt" in dockerfile
     assert "python -m pip install --no-deps ." in dockerfile
     assert dockerfile.index("COPY src ./src") < dockerfile.index("python -m pip install --no-deps .")
     assert dockerfile.index("python -m pip install --no-deps .") < dockerfile.index("COPY data ./data")
@@ -142,9 +143,9 @@ def test_pod_eval_dockerfile_uses_runpod_base() -> None:
 def test_runpod_bootstrap_uses_volume_caches_and_base_services() -> None:
     script = BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
 
+    assert '"SGLANG_STORAGE_PATH": WORKSPACE_DIR / "sglang-storage"' in script
     assert '"TMPDIR": WORKSPACE_DIR / "tmp"' in script
     assert '"TRITON_CACHE_DIR": WORKSPACE_DIR / "triton-cache"' in script
-    assert '"VLLM_CACHE_ROOT": WORKSPACE_DIR / "vllm-cache"' in script
     assert 'os.environ.setdefault("CC", "/usr/bin/gcc")' in script
     assert '_env_bool("POD_EVAL_START_RUNPOD_SERVICES", True)' in script
     assert 'Path("/start.sh")' in script
@@ -182,7 +183,7 @@ def test_pyproject_declares_training_extra() -> None:
     assert any(dep.startswith("trl") for dep in train_deps)
 
 
-def test_pod_requirements_split_runtime_training_and_vllm() -> None:
+def test_pod_requirements_split_runtime_training_and_sglang() -> None:
     assert read_requirements("requirements/pod-core.txt") == [
         "openai==2.32.0",
         "pydantic==2.13.3",
@@ -198,7 +199,10 @@ def test_pod_requirements_split_runtime_training_and_vllm() -> None:
         "transformers==4.57.6",
         "trl==1.2.0",
     ]
-    assert read_requirements("requirements/pod-vllm.txt") == ["vllm==0.16.0"]
+    assert read_requirements("requirements/pod-sglang.txt") == [
+        "sglang==0.5.10.post1",
+        "sglang-kernel==0.4.1",
+    ]
 
 
 def test_pod_workflow_does_not_install_training_dependencies_at_runtime() -> None:
@@ -215,21 +219,21 @@ def test_runpod_bootstrap_ensures_workspace_defaults(tmp_path: Path, monkeypatch
     artifact_dir = workspace_dir / "nlsh-artifacts"
     monkeypatch.setattr(module, "WORKSPACE_DIR", workspace_dir)
     monkeypatch.setattr(module, "ARTIFACT_DIR", artifact_dir)
-    for key in ("HF_HOME", "TMPDIR", "TRANSFORMERS_CACHE", "TRITON_CACHE_DIR", "VLLM_CACHE_ROOT", "XDG_CACHE_HOME"):
+    for key in ("HF_HOME", "SGLANG_STORAGE_PATH", "TMPDIR", "TRANSFORMERS_CACHE", "TRITON_CACHE_DIR", "XDG_CACHE_HOME"):
         monkeypatch.delenv(key, raising=False)
 
     module._ensure_workspace()
 
     assert artifact_dir.exists()
     assert (workspace_dir / "hf-cache").exists()
+    assert (workspace_dir / "sglang-storage").exists()
     assert (workspace_dir / "tmp").exists()
     assert (workspace_dir / "triton-cache").exists()
-    assert (workspace_dir / "vllm-cache").exists()
     assert (workspace_dir / ".cache").exists()
     assert os.environ["HF_HOME"] == str(workspace_dir / "hf-cache")
+    assert os.environ["SGLANG_STORAGE_PATH"] == str(workspace_dir / "sglang-storage")
     assert os.environ["TMPDIR"] == str(workspace_dir / "tmp")
     assert os.environ["TRITON_CACHE_DIR"] == str(workspace_dir / "triton-cache")
-    assert os.environ["VLLM_CACHE_ROOT"] == str(workspace_dir / "vllm-cache")
 
 
 def test_runpod_bootstrap_starts_runpod_services_when_available(tmp_path: Path, monkeypatch: Any) -> None:
@@ -308,11 +312,13 @@ def test_runpod_startup_python_syntax() -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_pod_eval_manifest_uses_conservative_vllm_args() -> None:
+def test_pod_eval_manifest_uses_conservative_sglang_defaults() -> None:
     manifest = json.loads(Path("configs/pod_eval_models.json").read_text(encoding="utf-8"))
 
-    assert "--enforce-eager" in manifest["defaults"]["vllm_args"]
-    assert "--disable-custom-all-reduce" in manifest["defaults"]["vllm_args"]
+    assert manifest["defaults"]["context_length"] == 4096
+    assert manifest["defaults"]["max_running_requests"] == 1
+    assert manifest["defaults"]["mem_fraction_static"] == 0.85
+    assert manifest["defaults"]["sglang_args"] == []
 
 
 def test_pod_workflow_requires_hf_token(tmp_path: Path) -> None:
@@ -452,15 +458,15 @@ def test_pod_workflow_lora_eval_command(tmp_path: Path, monkeypatch: Any) -> Non
         WorkflowModel("microsoft/Phi-4-mini-instruct", "Phi-4 Mini Instruct"),
         output_dir=tmp_path / "post",
         log_name="post.log",
-        request_model="nlsh-phi4-ft",
-        extra_vllm_args=("--enable-lora", "--lora-modules", f"nlsh-phi4-ft={tmp_path / 'adapter'}"),
+        request_model="microsoft/Phi-4-mini-instruct:nlsh-phi4-ft",
+        extra_sglang_args=("--enable-lora", "--lora-paths", f"nlsh-phi4-ft={tmp_path / 'adapter'}"),
     )
 
     command = captured[0]
     assert "--request-model" in command
-    assert "nlsh-phi4-ft" in command
-    assert "--vllm-arg=--enable-lora" in command
-    assert "--vllm-arg=--lora-modules" in command
+    assert "microsoft/Phi-4-mini-instruct:nlsh-phi4-ft" in command
+    assert "--sglang-arg=--enable-lora" in command
+    assert "--sglang-arg=--lora-paths" in command
 
 
 def test_pod_eval_gold_model_path(tmp_path: Path) -> None:
@@ -500,25 +506,24 @@ def test_pod_eval_reduces_spec_for_oom() -> None:
         id="example/model",
         display_name="Example",
         trust_remote_code=False,
-        max_model_len=4096,
-        max_num_seqs=4,
-        gpu_memory_utilization=0.85,
-        generation_config="vllm",
-        vllm_args=(),
+        context_length=4096,
+        max_running_requests=4,
+        mem_fraction_static=0.85,
+        sglang_args=(),
     )
 
     next_spec, changes = module._reduce_spec_for_oom(
         spec,
-        min_max_model_len=512,
-        min_gpu_memory_utilization=0.55,
+        min_context_length=512,
+        min_mem_fraction_static=0.55,
     )
 
     assert next_spec is not None
-    assert next_spec.max_num_seqs == 2
-    assert next_spec.max_model_len == 2048
-    assert next_spec.gpu_memory_utilization == 0.8
+    assert next_spec.max_running_requests == 2
+    assert next_spec.context_length == 2048
+    assert next_spec.mem_fraction_static == 0.8
     assert changes == {
-        "max_num_seqs": {"from": 4, "to": 2},
-        "max_model_len": {"from": 4096, "to": 2048},
-        "gpu_memory_utilization": {"from": 0.85, "to": 0.8},
+        "max_running_requests": {"from": 4, "to": 2},
+        "context_length": {"from": 4096, "to": 2048},
+        "mem_fraction_static": {"from": 0.85, "to": 0.8},
     }
