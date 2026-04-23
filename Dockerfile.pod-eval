@@ -14,7 +14,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     XDG_CACHE_HOME=/workspace/.cache \
     NLSH_VLLM_LIKE=1 \
     POD_EVAL_VENV=/workspace/nlsh-venv \
-    POD_EVAL_VLLM_SPEC=vllm \
     PIP_NO_CACHE_DIR=1 \
     PYTHONUNBUFFERED=1
 
@@ -48,7 +47,6 @@ RUN mkdir -p /workspace/hf-cache /workspace/tmp /workspace/triton-cache /workspa
         python3-venv \
         qpdf \
     && rm -rf /var/lib/apt/lists/* \
-    && python -m pip install --no-cache-dir -e . \
     && chmod +x scripts/pod_eval.py scripts/runpod_bootstrap.py
 
 ENTRYPOINT []

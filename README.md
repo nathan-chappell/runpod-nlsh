@@ -42,7 +42,7 @@ Plans allow up to three linear steps. `find_files` is optional, but when used it
 Create or reuse a virtualenv, then install the package in editable mode:
 
 ```bash
-./.venv/bin/pip install -e .[dev]
+./.venv/bin/pip install -e ".[dev]"
 ```
 
 Install required system tools:
@@ -111,14 +111,14 @@ Create a Runpod pod with:
 - Recommended volume size: at least 100 GB
 - Container disk: use 20 GB for the Runpod PyTorch base image. The model, vLLM, tmp, and cache data still live on `/workspace`, but the base image itself is large enough that 10 GB is likely too tight if Runpod counts image/root filesystem unpacking there.
 
-The container `CMD` is `["python", "scripts/runpod_bootstrap.py"]`. The bootstrap stays stdlib-only so it can prepare the persistent Python environment before project dependencies are available. It starts Runpod's base-image services with `/start.sh` when present, creates or reuses `/workspace/nlsh-venv`, installs missing dependencies, then hands off to the Typer workflow at `python -m nlsh.pod_workflow run`.
+The container `CMD` is `["python", "scripts/runpod_bootstrap.py"]`. The bootstrap stays stdlib-only so it can prepare the persistent Python environment before project dependencies are available. On first startup it creates `/workspace/nlsh-venv`, installs the project with training extras plus `vllm` into that venv, then reuses the venv on later starts. After that it hands off to the Typer workflow at `python -m nlsh.pod_workflow run`.
 
 The Typer workflow logs the resolved configuration and execution plan, then:
 
 1. validates `HF_TOKEN` and enters `/opt/nlsh`
 2. starts all manifest model downloads in parallel
 3. evaluates models in priority order as each preferred model is ready: Phi-4, SmolLM3, then Qwen3
-4. installs training extras when needed and fine-tunes Phi-4-mini with `scripts/phi_4_training.py`
+4. fine-tunes Phi-4-mini with `scripts/phi_4_training.py`
 5. serves the trained adapter with vLLM LoRA support and re-evaluates the fine-tuned Phi-4 adapter
 
 Baseline evals and training now keep incremental state on disk so a failure does not erase the run history. The workflow writes `/workspace/nlsh-artifacts/workflow_state.json`; each model eval writes `run_state.json`, `report.json`, and `eval.log`; OOM retries preserve prior attempt artifacts as `*.attempt-N.*`; and training writes `training_state.json` plus regular checkpoints under the output directory. Reports go to `/workspace/nlsh-artifacts`, the adapter goes to `/workspace/nlsh-finetune/phi-4-mini-instruct-lora`, and exit codes are recorded in `/workspace/nlsh-artifacts/last_eval_exit_code`, `/workspace/nlsh-artifacts/last_training_exit_code`, `/workspace/nlsh-artifacts/last_post_training_eval_exit_code`, and `/workspace/nlsh-artifacts/last_exit_code`. Set `POD_EVAL_EXIT_AFTER=1` to exit after the batch instead of keeping the container alive for inspection.
@@ -131,7 +131,6 @@ Optional runtime knobs:
 POD_EVAL_LIMIT=2
 POD_EVAL_TIMEOUT=90
 POD_EVAL_STARTUP_TIMEOUT=900
-POD_EVAL_VLLM_SPEC=vllm
 POD_EVAL_DOWNLOAD_WORKERS=3
 POD_EVAL_EVAL_ARGS="--oom-retries 3"
 RUNPOD_START_BASE_SERVICES=1
@@ -146,9 +145,9 @@ You can also run commands manually in the pod:
 
 ```bash
 export HF_HOME=/workspace/hf-cache
-python scripts/pod_eval.py download-models
-python scripts/pod_eval.py run-suite --dataset data/samples
-python -m nlsh.pod_workflow run --dry-run
+/workspace/nlsh-venv/bin/python scripts/pod_eval.py download-models
+/workspace/nlsh-venv/bin/python scripts/pod_eval.py run-suite --dataset data/samples
+/workspace/nlsh-venv/bin/python -m nlsh.pod_workflow run --dry-run
 ```
 
 The manifest is `configs/pod_eval_models.json`. It currently evaluates `microsoft/Phi-4-mini-instruct`, `HuggingFaceTB/SmolLM3-3B`, and `Qwen/Qwen3-8B` through vLLM with conservative single-GPU settings. Downloads run in parallel; eval stays sequential in the preferred order so one GPU is used predictably. If a vLLM startup or serve attempt fails with an OOM, `scripts/pod_eval.py` retries with smaller `max_num_seqs`, then shorter `max_model_len`, then lower `gpu_memory_utilization` until it hits the configured floor. If training hits an OOM, `scripts/phi_4_training.py` retries with smaller batch sizes, then shorter sequence length, resuming from the latest checkpoint when one exists.
@@ -175,7 +174,7 @@ Each row includes:
 For a direct single-GPU Phi-4-mini LoRA run on a 32 GB+ Runpod GPU, install the training extras in the pod and run the training script directly:
 
 ```bash
-pip install -e '.[train]'
+pip install -e ".[dev,train]"
 python scripts/phi_4_training.py \
   --output-dir /workspace/nlsh-finetune/phi-4-mini-instruct-lora
 ```

@@ -251,7 +251,7 @@ def _training_imports() -> dict[str, Any]:
     if missing:
         package_list = ", ".join(missing)
         raise SystemExit(
-            f"Missing training dependencies: {package_list}. Install them with `pip install -e .[train]` on the Runpod PyTorch image."
+            f'Missing training dependencies: {package_list}. Install them with `pip install -e ".[dev,train]"`.'
         )
     return imported
 

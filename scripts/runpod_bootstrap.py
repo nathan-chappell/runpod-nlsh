@@ -12,7 +12,8 @@ WORKSPACE_DIR = Path(os.environ.get("POD_EVAL_WORKSPACE", "/workspace"))
 ARTIFACT_DIR = Path(os.environ.get("POD_EVAL_OUTPUT_DIR", WORKSPACE_DIR / "nlsh-artifacts"))
 VENV_DIR = Path(os.environ.get("POD_EVAL_VENV", WORKSPACE_DIR / "nlsh-venv"))
 BOOTSTRAP_PYTHON = os.environ.get("POD_EVAL_BOOTSTRAP_PYTHON", sys.executable)
-VLLM_SPEC = os.environ.get("POD_EVAL_VLLM_SPEC", "vllm")
+PROJECT_SPEC = ".[train]"
+VLLM_PACKAGE = "vllm"
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -79,41 +80,17 @@ def _start_runpod_services() -> None:
     time.sleep(float(os.environ.get("POD_EVAL_RUNPOD_SERVICE_DELAY", "2")))
 
 
-def _module_available(python_bin: Path, module_name: str) -> bool:
-    result = subprocess.run(
-        [str(python_bin), "-c", f"import {module_name}"],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        text=True,
-    )
-    return result.returncode == 0
-
-
 def _prepare_python() -> Path:
-    if _env_bool("POD_EVAL_SKIP_VENV", False):
-        python_bin = Path(os.environ.get("POD_EVAL_PYTHON", sys.executable))
-        _log(f"using existing Python interpreter: {python_bin}")
+    python_bin = VENV_DIR / "bin/python"
+    if python_bin.exists():
+        _log(f"using persistent Python environment at {python_bin}")
         return python_bin
 
-    python_bin = VENV_DIR / "bin/python"
-    if not python_bin.exists():
-        _log(f"creating persistent Python environment at {VENV_DIR}")
-        _run([BOOTSTRAP_PYTHON, "-m", "venv", str(VENV_DIR)])
-
+    _log(f"creating persistent Python environment at {VENV_DIR}")
+    _run([BOOTSTRAP_PYTHON, "-m", "venv", str(VENV_DIR)])
     _run([str(python_bin), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
-
-    if not (_module_available(python_bin, "nlsh") and _module_available(python_bin, "typer")):
-        _run([str(python_bin), "-m", "pip", "install", "-e", str(APP_DIR)], cwd=APP_DIR)
-    else:
-        _log("nlsh and typer are already available in the persistent venv")
-
-    if _env_bool("POD_EVAL_SKIP_VLLM_INSTALL", False):
-        _log("skipping vLLM install because POD_EVAL_SKIP_VLLM_INSTALL=1")
-    elif not _module_available(python_bin, "vllm"):
-        _run([str(python_bin), "-m", "pip", "install", VLLM_SPEC])
-    else:
-        _log("vLLM is already available in the persistent venv")
+    _run([str(python_bin), "-m", "pip", "install", "-e", PROJECT_SPEC], cwd=APP_DIR)
+    _run([str(python_bin), "-m", "pip", "install", VLLM_PACKAGE], cwd=APP_DIR)
 
     return python_bin
 

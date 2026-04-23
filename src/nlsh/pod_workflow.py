@@ -94,10 +94,6 @@ class WorkflowConfig:
         )
     ))
     train_model_id: str = os.environ.get("POD_EVAL_TRAIN_MODEL_ID", "microsoft/Phi-4-mini-instruct")
-    train_spec: str = field(default_factory=lambda: os.environ.get(
-        "POD_EVAL_TRAIN_SPEC",
-        f"{_default_app_dir()}[train]",
-    ))
     limit: int | None = field(default_factory=lambda: _optional_int("POD_EVAL_LIMIT"))
     timeout: float = field(default_factory=lambda: float(os.environ.get("POD_EVAL_TIMEOUT", "90")))
     startup_timeout: float = field(default_factory=lambda: float(os.environ.get("POD_EVAL_STARTUP_TIMEOUT", "900")))
@@ -378,37 +374,28 @@ class Workflow:
             self._write_state()
             return 0
 
-        status = 0
-        if not self.config.train_dry_run and not training_modules_available():
-            status = run_logged_command(
-                [sys.executable, "-m", "pip", "install", "-e", self.config.train_spec],
-                self.config.artifact_dir / "training-deps.log",
-                self.logger,
-                cwd=self.config.app_dir,
-            )
-        if status == 0:
-            command = [
-                sys.executable,
-                "scripts/phi_4_training.py",
-                "--model-id",
-                self.config.train_model_id,
-                "--dataset",
-                str(self.config.training_dataset),
-                "--output-dir",
-                str(self.config.train_output_dir),
-                "--workspace",
-                str(self.config.workspace_dir),
-            ]
-            if self.config.train_dataset is not None:
-                command.extend(["--train-dataset", str(self.config.train_dataset)])
-            if self.config.train_eval_dataset is not None:
-                command.extend(["--eval-dataset", str(self.config.train_eval_dataset)])
-            if self.config.train_no_eval:
-                command.append("--no-eval")
-            if self.config.train_dry_run:
-                command.append("--dry-run")
-            command.extend(self.config.train_args)
-            status = run_logged_command(command, self.config.artifact_dir / "training.log", self.logger, cwd=self.config.app_dir)
+        command = [
+            sys.executable,
+            "scripts/phi_4_training.py",
+            "--model-id",
+            self.config.train_model_id,
+            "--dataset",
+            str(self.config.training_dataset),
+            "--output-dir",
+            str(self.config.train_output_dir),
+            "--workspace",
+            str(self.config.workspace_dir),
+        ]
+        if self.config.train_dataset is not None:
+            command.extend(["--train-dataset", str(self.config.train_dataset)])
+        if self.config.train_eval_dataset is not None:
+            command.extend(["--eval-dataset", str(self.config.train_eval_dataset)])
+        if self.config.train_no_eval:
+            command.append("--no-eval")
+        if self.config.train_dry_run:
+            command.append("--dry-run")
+        command.extend(self.config.train_args)
+        status = run_logged_command(command, self.config.artifact_dir / "training.log", self.logger, cwd=self.config.app_dir)
 
         self._write_exit_code("last_training_exit_code", status)
         self.state["training"] = {
@@ -590,15 +577,6 @@ def run_logged_command(command: list[str], log_path: Path, logger: logging.Logge
             logger.info(stripped)
             _emit(log_file, stripped)
         return process.wait()
-
-
-def training_modules_available() -> bool:
-    for module_name in ("datasets", "peft", "transformers", "trl"):
-        try:
-            __import__(module_name)
-        except ImportError:
-            return False
-    return True
 
 
 def first_nonzero(*values: int) -> int:

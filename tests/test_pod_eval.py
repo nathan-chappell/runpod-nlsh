@@ -99,6 +99,8 @@ def test_pod_eval_dockerfile_uses_runpod_base() -> None:
     assert "mkdir -p /workspace/hf-cache /workspace/tmp" in dockerfile
     assert "chmod 1777 /workspace/tmp" in dockerfile
     assert "POD_EVAL_VENV=/workspace/nlsh-venv" in dockerfile
+    assert "POD_EVAL_VLLM_SPEC" not in dockerfile
+    assert "python -m pip install --no-cache-dir -e ." not in dockerfile
     assert "python scripts/pod_eval.py download-models" not in dockerfile
     assert 'CMD ["python", "scripts/runpod_bootstrap.py"]' in dockerfile
 
@@ -113,6 +115,11 @@ def test_runpod_bootstrap_uses_volume_caches_and_base_services() -> None:
     assert '_env_bool("POD_EVAL_START_RUNPOD_SERVICES", True)' in script
     assert 'Path("/start.sh")' in script
     assert '"-m", "nlsh.pod_workflow", "run"' in script
+    assert 'PROJECT_SPEC = ".[train]"' in script
+    assert 'VLLM_PACKAGE = "vllm"' in script
+    assert '"-m", "pip", "install", "-e", PROJECT_SPEC' in script
+    assert '"-m", "pip", "install", VLLM_PACKAGE' in script
+    assert "_module_available" not in script
 
 
 def test_pod_workflow_defaults_to_priority_order() -> None:
@@ -131,9 +138,18 @@ def test_pyproject_declares_training_extra() -> None:
 
     assert any(dep.startswith("typer") for dep in dependencies)
     assert any(dep.startswith("datasets") for dep in train_deps)
+    assert any(dep.startswith("hf_transfer") for dep in train_deps)
     assert any(dep.startswith("peft") for dep in train_deps)
     assert any(dep.startswith("transformers") for dep in train_deps)
     assert any(dep.startswith("trl") for dep in train_deps)
+
+
+def test_pod_workflow_does_not_install_training_dependencies_at_runtime() -> None:
+    workflow = Path("src/nlsh/pod_workflow.py").read_text(encoding="utf-8")
+
+    assert "training_modules_available" not in workflow
+    assert '"training-deps.log"' not in workflow
+    assert '"pip", "install", "-e"' not in workflow
 
 
 def test_runpod_startup_python_syntax() -> None:
