@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 from __future__ import annotations
 
-import argparse
 import inspect
 import json
 import math
@@ -13,10 +12,14 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
+import typer
+
 from nlsh.dataio import DEFAULT_EVAL_FRACTION, default_dataset_path, load_jsonl, partition_records
 
 DEFAULT_MODEL_ID = "microsoft/Phi-4-mini-instruct"
 DEFAULT_DATASET = Path("data/samples")
+VALID_ATTN_IMPLEMENTATIONS = ("auto", "flash_attention_2", "sdpa", "eager")
+VALID_TORCH_DTYPES = ("bf16", "fp16", "fp32")
 OOM_TEXT_PATTERNS = (
     "out of memory",
     "cuda error: out of memory",
@@ -32,6 +35,56 @@ OOM_TEXT_PATTERNS = (
 class PreparedDatasets:
     train: list[dict[str, Any]]
     eval: list[dict[str, Any]] | None
+
+
+@dataclass(slots=True)
+class TrainingArgs:
+    model_id: str
+    dataset: Path
+    train_dataset: Path | None
+    eval_dataset: Path | None
+    eval_fraction: float
+    output_dir: Path
+    workspace: Path | None
+    dry_run: bool
+    attn_implementation: str
+    torch_dtype: str
+    trust_remote_code: bool
+    max_length: int
+    packing: bool
+    no_eval: bool
+    lora_r: int
+    lora_alpha: int
+    lora_dropout: float
+    target_modules: list[str]
+    per_device_train_batch_size: int
+    per_device_eval_batch_size: int
+    gradient_accumulation_steps: int
+    gradient_checkpointing: bool
+    learning_rate: float
+    num_train_epochs: float
+    max_steps: int
+    warmup_ratio: float
+    lr_scheduler_type: str
+    logging_steps: int
+    save_steps: int
+    save_total_limit: int
+    seed: int
+    resume_from_checkpoint: Path | None
+    report_to: str
+    dataset_num_proc: int
+    overwrite_output_dir: bool
+    oom_retries: int
+    min_train_batch_size: int
+    min_eval_batch_size: int
+    min_max_length: int
+
+
+app = typer.Typer(
+    add_completion=False,
+    help="Fine-tune Phi-4-mini-instruct on nlsh JSONL data with single-GPU LoRA.",
+    rich_markup_mode=None,
+)
 
 
 def _utc_now() -> str:
@@ -55,28 +108,39 @@ def default_output_dir() -> Path:
 def parse_target_modules(raw: str) -> list[str]:
     modules = [item.strip() for item in raw.split(",") if item.strip()]
     if not modules:
-        raise argparse.ArgumentTypeError("--target-modules must name at least one module")
+        raise typer.BadParameter("--target-modules must name at least one module")
     return modules
 
 
-def parse_eval_fraction(raw: str) -> float:
-    value = float(raw)
+def parse_eval_fraction(value: float) -> float:
     if value < 0 or value >= 1:
-        raise argparse.ArgumentTypeError("--eval-fraction must be >= 0 and < 1")
+        raise typer.BadParameter("--eval-fraction must be >= 0 and < 1")
     return value
 
 
-def parse_positive_int(raw: str) -> int:
-    value = int(raw)
+def parse_positive_int(value: int) -> int:
     if value < 1:
-        raise argparse.ArgumentTypeError("value must be at least 1")
+        raise typer.BadParameter("value must be at least 1")
     return value
 
 
-def parse_non_negative_int(raw: str) -> int:
-    value = int(raw)
+def parse_non_negative_int(value: int) -> int:
     if value < 0:
-        raise argparse.ArgumentTypeError("value must be at least 0")
+        raise typer.BadParameter("value must be at least 0")
+    return value
+
+
+def parse_attn_implementation(value: str) -> str:
+    if value not in VALID_ATTN_IMPLEMENTATIONS:
+        choices = ", ".join(VALID_ATTN_IMPLEMENTATIONS)
+        raise typer.BadParameter(f"--attn-implementation must be one of: {choices}")
+    return value
+
+
+def parse_torch_dtype(value: str) -> str:
+    if value not in VALID_TORCH_DTYPES:
+        choices = ", ".join(VALID_TORCH_DTYPES)
+        raise typer.BadParameter(f"--torch-dtype must be one of: {choices}")
     return value
 
 
@@ -126,13 +190,10 @@ def load_prompt_completion_dataset(path: Path) -> list[dict[str, Any]]:
 
 
 def to_prompt_completion_records(records: list[dict[str, Any]], *, path: Path) -> list[dict[str, Any]]:
-    return [
-        to_prompt_completion_record(record, row_number=index, path=path)
-        for index, record in enumerate(records, start=1)
-    ]
+    return [to_prompt_completion_record(record, row_number=index, path=path) for index, record in enumerate(records, start=1)]
 
 
-def prepare_datasets(args: argparse.Namespace) -> PreparedDatasets:
+def prepare_datasets(args: TrainingArgs) -> PreparedDatasets:
     using_explicit_datasets = args.train_dataset is not None or args.eval_dataset is not None
     if using_explicit_datasets:
         if args.train_dataset is None:
@@ -171,60 +232,6 @@ def configure_workspace_cache(workspace: Path | None) -> None:
     os.environ.setdefault("TRANSFORMERS_CACHE", os.environ["HF_HOME"])
 
 
-def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Fine-tune Phi-4-mini-instruct on nlsh JSONL data with single-GPU LoRA.",
-    )
-    parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
-    parser.add_argument(
-        "--dataset",
-        type=Path,
-        default=DEFAULT_DATASET if DEFAULT_DATASET.exists() else default_dataset_path(),
-        help="Canonical JSONL file or directory to partition for training and eval.",
-    )
-    parser.add_argument("--train-dataset", type=Path, help="Explicit training JSONL file or directory.")
-    parser.add_argument("--eval-dataset", type=Path, help="Explicit eval JSONL file or directory.")
-    parser.add_argument("--eval-fraction", type=parse_eval_fraction, default=DEFAULT_EVAL_FRACTION)
-    parser.add_argument("--output-dir", type=Path, default=default_output_dir())
-    parser.add_argument("--workspace", type=Path, default=Path("/workspace") if Path("/workspace").exists() else None)
-    parser.add_argument("--dry-run", action="store_true", help="Validate inputs and print the resolved config.")
-
-    parser.add_argument("--attn-implementation", default="auto", choices=["auto", "flash_attention_2", "sdpa", "eager"])
-    parser.add_argument("--torch-dtype", default="bf16", choices=["bf16", "fp16", "fp32"])
-    parser.add_argument("--trust-remote-code", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--max-length", type=int, default=2048)
-    parser.add_argument("--packing", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--no-eval", action="store_true")
-
-    parser.add_argument("--lora-r", type=int, default=8)
-    parser.add_argument("--lora-alpha", type=int, default=16)
-    parser.add_argument("--lora-dropout", type=float, default=0.05)
-    parser.add_argument("--target-modules", type=parse_target_modules, default=["qkv_proj"])
-
-    parser.add_argument("--per-device-train-batch-size", type=int, default=1)
-    parser.add_argument("--per-device-eval-batch-size", type=int, default=1)
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
-    parser.add_argument("--gradient-checkpointing", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--learning-rate", type=float, default=2.0e-4)
-    parser.add_argument("--num-train-epochs", type=float, default=3.0)
-    parser.add_argument("--max-steps", type=int, default=-1)
-    parser.add_argument("--warmup-ratio", type=float, default=0.03)
-    parser.add_argument("--lr-scheduler-type", default="cosine")
-    parser.add_argument("--logging-steps", type=int, default=10)
-    parser.add_argument("--save-steps", type=int, default=10)
-    parser.add_argument("--save-total-limit", type=int, default=1)
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--resume-from-checkpoint", type=Path)
-    parser.add_argument("--report-to", default="none")
-    parser.add_argument("--dataset-num-proc", type=int, default=1)
-    parser.add_argument("--overwrite-output-dir", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--oom-retries", type=parse_non_negative_int, default=3)
-    parser.add_argument("--min-train-batch-size", type=parse_positive_int, default=1)
-    parser.add_argument("--min-eval-batch-size", type=parse_positive_int, default=1)
-    parser.add_argument("--min-max-length", type=parse_positive_int, default=512)
-    return parser
-
-
 def _dtype(torch_module: Any, name: str) -> Any:
     if name == "bf16":
         return torch_module.bfloat16
@@ -244,13 +251,12 @@ def _training_imports() -> dict[str, Any]:
     if missing:
         package_list = ", ".join(missing)
         raise SystemExit(
-            f"Missing training dependencies: {package_list}. "
-            "Install them with `pip install -e .[train]` on the Runpod PyTorch image."
+            f"Missing training dependencies: {package_list}. Install them with `pip install -e .[train]` on the Runpod PyTorch image."
         )
     return imported
 
 
-def _sft_config_kwargs(args: argparse.Namespace, has_eval: bool) -> dict[str, Any]:
+def _sft_config_kwargs(args: TrainingArgs, has_eval: bool) -> dict[str, Any]:
     eval_strategy = "steps" if has_eval else "no"
     kwargs: dict[str, Any] = {
         "output_dir": str(args.output_dir),
@@ -289,19 +295,15 @@ def _sft_config_kwargs(args: argparse.Namespace, has_eval: bool) -> dict[str, An
     return kwargs
 
 
-def _make_sft_config(config_class: Any, args: argparse.Namespace, has_eval: bool) -> Any:
+def _make_sft_config(config_class: Any, args: TrainingArgs, has_eval: bool) -> Any:
     supported = set(inspect.signature(config_class).parameters)
-    kwargs = {
-        key: value
-        for key, value in _sft_config_kwargs(args, has_eval).items()
-        if key in supported
-    }
+    kwargs = {key: value for key, value in _sft_config_kwargs(args, has_eval).items() if key in supported}
     return config_class(**kwargs)
 
 
 def _load_model(
     *,
-    args: argparse.Namespace,
+    args: TrainingArgs,
     torch_module: Any,
     auto_model_class: Any,
 ) -> tuple[Any, str]:
@@ -361,7 +363,7 @@ def _make_trainer_kwargs(
     return kwargs
 
 
-def build_dry_run_payload(args: argparse.Namespace, datasets: PreparedDatasets) -> dict[str, Any]:
+def build_dry_run_payload(args: TrainingArgs, datasets: PreparedDatasets) -> dict[str, Any]:
     return {
         "model_id": args.model_id,
         "dataset": str(args.dataset),
@@ -399,7 +401,7 @@ def build_dry_run_payload(args: argparse.Namespace, datasets: PreparedDatasets) 
     }
 
 
-def train(args: argparse.Namespace, datasets: PreparedDatasets) -> None:
+def train(args: TrainingArgs, datasets: PreparedDatasets) -> None:
     imports = _training_imports()
     hf_datasets = imports["datasets"]
     peft = imports["peft"]
@@ -449,9 +451,7 @@ def train(args: argparse.Namespace, datasets: PreparedDatasets) -> None:
         )
     )
 
-    train_result = trainer.train(
-        resume_from_checkpoint=str(args.resume_from_checkpoint) if args.resume_from_checkpoint else None
-    )
+    train_result = trainer.train(resume_from_checkpoint=str(args.resume_from_checkpoint) if args.resume_from_checkpoint else None)
     trainer.log_metrics("train", train_result.metrics)
     trainer.save_metrics("train", train_result.metrics)
     trainer.save_state()
@@ -513,7 +513,7 @@ def _reduced_batch_size(current: int, minimum: int) -> int | None:
     return reduced if reduced >= minimum else None
 
 
-def _reduce_training_footprint(args: argparse.Namespace) -> dict[str, dict[str, int]] | None:
+def _reduce_training_footprint(args: TrainingArgs) -> dict[str, dict[str, int]] | None:
     changes: dict[str, dict[str, int]] = {}
 
     next_train_batch = _reduced_batch_size(args.per_device_train_batch_size, args.min_train_batch_size)
@@ -549,7 +549,7 @@ def _reduce_training_footprint(args: argparse.Namespace) -> dict[str, dict[str, 
     return None
 
 
-def _training_state_payload(args: argparse.Namespace, datasets: PreparedDatasets) -> dict[str, Any]:
+def _training_state_payload(args: TrainingArgs, datasets: PreparedDatasets) -> dict[str, Any]:
     return {
         "started_at": _utc_now(),
         "finished_at": None,
@@ -561,7 +561,7 @@ def _training_state_payload(args: argparse.Namespace, datasets: PreparedDatasets
     }
 
 
-def train_with_retries(args: argparse.Namespace, datasets: PreparedDatasets) -> None:
+def train_with_retries(args: TrainingArgs, datasets: PreparedDatasets) -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     state_path = args.output_dir / "training_state.json"
     state = _training_state_payload(args, datasets)
@@ -612,8 +612,7 @@ def train_with_retries(args: argparse.Namespace, datasets: PreparedDatasets) -> 
                     attempt_state["status"] = "retrying"
                     attempt_state["retry_adjustments"] = changes
                     print(
-                        f"retrying training after OOM with adjustments: "
-                        f"{json.dumps(changes, ensure_ascii=False)}",
+                        f"retrying training after OOM with adjustments: {json.dumps(changes, ensure_ascii=False)}",
                         file=sys.stderr,
                         flush=True,
                     )
@@ -628,24 +627,107 @@ def train_with_retries(args: argparse.Namespace, datasets: PreparedDatasets) -> 
             raise
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = build_arg_parser()
-    args = parser.parse_args(argv)
+@app.command()
+def run(
+    model_id: str = typer.Option(DEFAULT_MODEL_ID),
+    dataset: Path = typer.Option(
+        DEFAULT_DATASET if DEFAULT_DATASET.exists() else default_dataset_path(),
+        help="Canonical JSONL file or directory to partition for training and eval.",
+    ),
+    train_dataset: Path | None = typer.Option(None, help="Explicit training JSONL file or directory."),
+    eval_dataset: Path | None = typer.Option(None, help="Explicit eval JSONL file or directory."),
+    eval_fraction: float = typer.Option(DEFAULT_EVAL_FRACTION),
+    output_dir: Path = typer.Option(default_output_dir()),
+    workspace: Path | None = typer.Option(Path("/workspace") if Path("/workspace").exists() else None),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Validate inputs and print the resolved config."),
+    attn_implementation: str = typer.Option("auto", help="One of: auto, flash_attention_2, sdpa, eager."),
+    torch_dtype: str = typer.Option("bf16", help="One of: bf16, fp16, fp32."),
+    trust_remote_code: bool = typer.Option(True, "--trust-remote-code/--no-trust-remote-code"),
+    max_length: int = typer.Option(2048),
+    packing: bool = typer.Option(False, "--packing/--no-packing"),
+    no_eval: bool = typer.Option(False, "--no-eval"),
+    lora_r: int = typer.Option(8),
+    lora_alpha: int = typer.Option(16),
+    lora_dropout: float = typer.Option(0.05),
+    target_modules: str = typer.Option("qkv_proj"),
+    per_device_train_batch_size: int = typer.Option(1),
+    per_device_eval_batch_size: int = typer.Option(1),
+    gradient_accumulation_steps: int = typer.Option(8),
+    gradient_checkpointing: bool = typer.Option(True, "--gradient-checkpointing/--no-gradient-checkpointing"),
+    learning_rate: float = typer.Option(2.0e-4),
+    num_train_epochs: float = typer.Option(3.0),
+    max_steps: int = typer.Option(-1),
+    warmup_ratio: float = typer.Option(0.03),
+    lr_scheduler_type: str = typer.Option("cosine"),
+    logging_steps: int = typer.Option(10),
+    save_steps: int = typer.Option(10),
+    save_total_limit: int = typer.Option(1),
+    seed: int = typer.Option(0),
+    resume_from_checkpoint: Path | None = typer.Option(None),
+    report_to: str = typer.Option("none"),
+    dataset_num_proc: int = typer.Option(1),
+    overwrite_output_dir: bool = typer.Option(True, "--overwrite-output-dir/--no-overwrite-output-dir"),
+    oom_retries: int = typer.Option(3),
+    min_train_batch_size: int = typer.Option(1),
+    min_eval_batch_size: int = typer.Option(1),
+    min_max_length: int = typer.Option(512, "--min-max-length"),
+) -> None:
+    args = TrainingArgs(
+        model_id=model_id,
+        dataset=dataset,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        eval_fraction=parse_eval_fraction(eval_fraction),
+        output_dir=output_dir,
+        workspace=workspace,
+        dry_run=dry_run,
+        attn_implementation=parse_attn_implementation(attn_implementation),
+        torch_dtype=parse_torch_dtype(torch_dtype),
+        trust_remote_code=trust_remote_code,
+        max_length=max_length,
+        packing=packing,
+        no_eval=no_eval,
+        lora_r=lora_r,
+        lora_alpha=lora_alpha,
+        lora_dropout=lora_dropout,
+        target_modules=parse_target_modules(target_modules),
+        per_device_train_batch_size=per_device_train_batch_size,
+        per_device_eval_batch_size=per_device_eval_batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        gradient_checkpointing=gradient_checkpointing,
+        learning_rate=learning_rate,
+        num_train_epochs=num_train_epochs,
+        max_steps=max_steps,
+        warmup_ratio=warmup_ratio,
+        lr_scheduler_type=lr_scheduler_type,
+        logging_steps=logging_steps,
+        save_steps=save_steps,
+        save_total_limit=save_total_limit,
+        seed=seed,
+        resume_from_checkpoint=resume_from_checkpoint,
+        report_to=report_to,
+        dataset_num_proc=dataset_num_proc,
+        overwrite_output_dir=overwrite_output_dir,
+        oom_retries=parse_non_negative_int(oom_retries),
+        min_train_batch_size=parse_positive_int(min_train_batch_size),
+        min_eval_batch_size=parse_positive_int(min_eval_batch_size),
+        min_max_length=parse_positive_int(min_max_length),
+    )
+
     configure_workspace_cache(args.workspace)
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
     try:
         datasets = prepare_datasets(args)
     except ValueError as exc:
-        parser.error(str(exc))
+        raise typer.BadParameter(str(exc)) from exc
 
     if args.dry_run:
         print(json.dumps(build_dry_run_payload(args, datasets), indent=2, ensure_ascii=False))
-        return 0
+        return
 
     train_with_retries(args, datasets)
-    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    app()

@@ -1,10 +1,9 @@
-import argparse
 import importlib.util
 import json
 import subprocess
 import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 from nlsh.dataio import load_jsonl, partition_records
 
@@ -100,7 +99,7 @@ def test_phi4_training_target_module_parser() -> None:
 
 def test_phi4_training_reduces_footprint_before_retry() -> None:
     module = load_training_module()
-    args = argparse.Namespace(
+    args = SimpleNamespace(
         per_device_train_batch_size=8,
         min_train_batch_size=1,
         gradient_accumulation_steps=2,
