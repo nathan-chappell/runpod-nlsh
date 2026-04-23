@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -12,6 +13,8 @@ WORKSPACE_DIR = Path(os.environ.get("POD_EVAL_WORKSPACE", "/workspace"))
 ARTIFACT_DIR = Path(os.environ.get("POD_EVAL_OUTPUT_DIR", WORKSPACE_DIR / "nlsh-artifacts"))
 VENV_DIR = Path(os.environ.get("POD_EVAL_VENV", WORKSPACE_DIR / "nlsh-venv"))
 BOOTSTRAP_PYTHON = os.environ.get("POD_EVAL_BOOTSTRAP_PYTHON", sys.executable)
+BOOTSTRAP_STATE_VERSION = "2"
+BOOTSTRAP_VERSION_FILE = WORKSPACE_DIR / ".nlsh-bootstrap-version"
 PROJECT_SPEC = ".[train]"
 BOOTSTRAP_PACKAGES = (PROJECT_SPEC, "vllm")
 
@@ -82,14 +85,23 @@ def _start_runpod_services() -> None:
 
 def _prepare_python() -> Path:
     python_bin = VENV_DIR / "bin/python"
-    if python_bin.exists():
-        _log(f"using persistent Python environment at {python_bin}")
-        return python_bin
+    current_version = BOOTSTRAP_VERSION_FILE.read_text(encoding="utf-8").strip() if BOOTSTRAP_VERSION_FILE.exists() else None
+    if current_version != BOOTSTRAP_STATE_VERSION and VENV_DIR.exists():
+        _log(
+            "resetting persistent Python environment at "
+            f"{VENV_DIR} for bootstrap state version {BOOTSTRAP_STATE_VERSION}"
+        )
+        shutil.rmtree(VENV_DIR)
 
-    _log(f"creating persistent Python environment at {VENV_DIR}")
-    _run([BOOTSTRAP_PYTHON, "-m", "venv", str(VENV_DIR)])
+    if not python_bin.exists():
+        _log(f"creating persistent Python environment at {VENV_DIR}")
+        _run([BOOTSTRAP_PYTHON, "-m", "venv", str(VENV_DIR)])
+    else:
+        _log(f"using persistent Python environment at {python_bin}")
+
     _run([str(python_bin), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
     _run([str(python_bin), "-m", "pip", "install", "-e", *BOOTSTRAP_PACKAGES], cwd=APP_DIR)
+    BOOTSTRAP_VERSION_FILE.write_text(BOOTSTRAP_STATE_VERSION + "\n", encoding="utf-8")
 
     return python_bin
 

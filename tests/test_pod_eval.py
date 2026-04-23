@@ -111,13 +111,18 @@ def test_runpod_bootstrap_uses_volume_caches_and_base_services() -> None:
     assert '"TMPDIR": WORKSPACE_DIR / "tmp"' in script
     assert '"TRITON_CACHE_DIR": WORKSPACE_DIR / "triton-cache"' in script
     assert '"VLLM_CACHE_ROOT": WORKSPACE_DIR / "vllm-cache"' in script
+    assert 'BOOTSTRAP_STATE_VERSION = "2"' in script
+    assert 'BOOTSTRAP_VERSION_FILE = WORKSPACE_DIR / ".nlsh-bootstrap-version"' in script
     assert 'os.environ.setdefault("CC", "/usr/bin/gcc")' in script
     assert '_env_bool("POD_EVAL_START_RUNPOD_SERVICES", True)' in script
     assert 'Path("/start.sh")' in script
     assert '"-m", "nlsh.pod_workflow", "run"' in script
     assert 'PROJECT_SPEC = ".[train]"' in script
     assert 'BOOTSTRAP_PACKAGES = (PROJECT_SPEC, "vllm")' in script
+    assert 'shutil.rmtree(VENV_DIR)' in script
+    assert '"-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"' in script
     assert '"-m", "pip", "install", "-e", *BOOTSTRAP_PACKAGES' in script
+    assert 'BOOTSTRAP_VERSION_FILE.write_text(BOOTSTRAP_STATE_VERSION + "\\n", encoding="utf-8")' in script
     assert "_module_available" not in script
 
 
