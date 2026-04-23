@@ -198,7 +198,7 @@ def test_pod_requirements_split_runtime_training_and_vllm() -> None:
         "transformers==4.57.6",
         "trl==1.2.0",
     ]
-    assert read_requirements("requirements/pod-vllm.txt") == ["vllm==0.19.1"]
+    assert read_requirements("requirements/pod-vllm.txt") == ["vllm==0.16.0"]
 
 
 def test_pod_workflow_does_not_install_training_dependencies_at_runtime() -> None:

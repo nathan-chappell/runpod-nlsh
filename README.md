@@ -97,18 +97,19 @@ The pod eval and fine-tuning flow builds on Runpod's PyTorch base image and inst
 
 ```bash
 docker build -f Dockerfile.pod-eval \
-  -t YOUR_DOCKERHUB_USER/runpod-nlsh:1.6 \
+  -t YOUR_DOCKERHUB_USER/runpod-nlsh:1.7 \
   -t YOUR_DOCKERHUB_USER/runpod-nlsh:latest .
-docker push YOUR_DOCKERHUB_USER/runpod-nlsh:1.6
+docker push YOUR_DOCKERHUB_USER/runpod-nlsh:1.7
 docker push YOUR_DOCKERHUB_USER/runpod-nlsh:latest
 ```
 
 The default base is `runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404`. To try another Runpod base, pass `--build-arg RUNPOD_BASE_IMAGE=...`.
+`requirements/pod-vllm.txt` intentionally pins `vllm==0.16.0` so the image stays on the base layer's Torch 2.9.1; newer `vllm` wheels require Torch 2.10.0 and would make `pip` download and replace Torch during `docker build`.
 
 Create a Runpod pod with:
 
 - GPU: RTX 4090 or another 32 GB+ GPU
-- Image: `YOUR_DOCKERHUB_USER/runpod-nlsh:1.6`
+- Image: `YOUR_DOCKERHUB_USER/runpod-nlsh:1.7`
 - Persistent or network volume mounted at `/workspace`
 - `HF_TOKEN` set from a Runpod secret
 - Recommended volume size: at least 100 GB
