@@ -1,0 +1,141 @@
+#!/usr/bin/env python
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+
+APP_DIR = Path(os.environ.get("POD_EVAL_APP_DIR", "/opt/nlsh"))
+WORKSPACE_DIR = Path(os.environ.get("POD_EVAL_WORKSPACE", "/workspace"))
+ARTIFACT_DIR = Path(os.environ.get("POD_EVAL_OUTPUT_DIR", WORKSPACE_DIR / "nlsh-artifacts"))
+VENV_DIR = Path(os.environ.get("POD_EVAL_VENV", WORKSPACE_DIR / "nlsh-venv"))
+BOOTSTRAP_PYTHON = os.environ.get("POD_EVAL_BOOTSTRAP_PYTHON", sys.executable)
+VLLM_SPEC = os.environ.get("POD_EVAL_VLLM_SPEC", "vllm")
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _log(message: str = "") -> None:
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{timestamp}] {message}" if message else ""
+    print(line, flush=True)
+    with (ARTIFACT_DIR / "startup.log").open("a", encoding="utf-8") as handle:
+        handle.write(line + "\n")
+
+
+def _run(command: list[str], *, cwd: Path | None = None) -> None:
+    _log("+ " + " ".join(command))
+    subprocess.run(command, cwd=cwd, check=True)
+
+
+def _ensure_workspace() -> None:
+    cache_paths = {
+        "HF_HOME": WORKSPACE_DIR / "hf-cache",
+        "TMPDIR": WORKSPACE_DIR / "tmp",
+        "TRANSFORMERS_CACHE": WORKSPACE_DIR / "hf-cache",
+        "TRITON_CACHE_DIR": WORKSPACE_DIR / "triton-cache",
+        "VLLM_CACHE_ROOT": WORKSPACE_DIR / "vllm-cache",
+        "XDG_CACHE_HOME": WORKSPACE_DIR / ".cache",
+    }
+    ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    for key, default_path in cache_paths.items():
+        path = Path(os.environ.setdefault(key, str(default_path)))
+        path.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("NLSH_VLLM_LIKE", "1")
+    os.environ.setdefault("VLLM_USE_V1", "0")
+    os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
+    os.environ.setdefault("CC", "/usr/bin/gcc")
+    os.environ.setdefault("CXX", "/usr/bin/g++")
+
+
+def _start_runpod_services() -> None:
+    should_start = _env_bool(
+        "RUNPOD_START_BASE_SERVICES",
+        _env_bool("POD_EVAL_START_RUNPOD_SERVICES", True),
+    )
+    if not should_start:
+        _log("Runpod base services disabled by RUNPOD_START_BASE_SERVICES=0")
+        return
+    start_script = Path("/start.sh")
+    if not os.access(start_script, os.X_OK):
+        _log("/start.sh is not present or executable; continuing without base services")
+        return
+    log_path = ARTIFACT_DIR / "runpod-base-services.log"
+    _log(f"starting Runpod base services with {start_script}; log={log_path}")
+    log_file = log_path.open("a", encoding="utf-8")
+    subprocess.Popen(
+        [str(start_script)],
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    time.sleep(float(os.environ.get("POD_EVAL_RUNPOD_SERVICE_DELAY", "2")))
+
+
+def _module_available(python_bin: Path, module_name: str) -> bool:
+    result = subprocess.run(
+        [str(python_bin), "-c", f"import {module_name}"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def _prepare_python() -> Path:
+    if _env_bool("POD_EVAL_SKIP_VENV", False):
+        python_bin = Path(os.environ.get("POD_EVAL_PYTHON", sys.executable))
+        _log(f"using existing Python interpreter: {python_bin}")
+        return python_bin
+
+    python_bin = VENV_DIR / "bin/python"
+    if not python_bin.exists():
+        _log(f"creating persistent Python environment at {VENV_DIR}")
+        _run([BOOTSTRAP_PYTHON, "-m", "venv", str(VENV_DIR)])
+
+    _run([str(python_bin), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
+
+    if not (_module_available(python_bin, "nlsh") and _module_available(python_bin, "typer")):
+        _run([str(python_bin), "-m", "pip", "install", "-e", str(APP_DIR)], cwd=APP_DIR)
+    else:
+        _log("nlsh and typer are already available in the persistent venv")
+
+    if _env_bool("POD_EVAL_SKIP_VLLM_INSTALL", False):
+        _log("skipping vLLM install because POD_EVAL_SKIP_VLLM_INSTALL=1")
+    elif not _module_available(python_bin, "vllm"):
+        _run([str(python_bin), "-m", "pip", "install", VLLM_SPEC])
+    else:
+        _log("vLLM is already available in the persistent venv")
+
+    return python_bin
+
+
+def main() -> int:
+    _ensure_workspace()
+    _log("nlsh Runpod bootstrap starting")
+    _log(f"app_dir={APP_DIR}")
+    _log(f"workspace_dir={WORKSPACE_DIR}")
+    _log(f"artifact_dir={ARTIFACT_DIR}")
+    _start_runpod_services()
+    python_bin = _prepare_python()
+    command = [str(python_bin), "-m", "nlsh.pod_workflow", "run"]
+    if _env_bool("POD_EVAL_DRY_RUN", False):
+        command.append("--dry-run")
+    _log("handoff to Typer workflow")
+    _log("+ " + " ".join(command))
+    os.chdir(APP_DIR)
+    os.execvpe(str(python_bin), command, os.environ)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

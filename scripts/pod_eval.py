@@ -10,7 +10,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -24,14 +24,44 @@ from nlsh.schema import PlanV1, normalize_plan, validate_plan_payload
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DATASET = REPO_ROOT / "data/dev.messages.jsonl"
+DEFAULT_DATASET = REPO_ROOT / "data/samples"
 DEFAULT_MANIFEST = REPO_ROOT / "configs/pod_eval_models.json"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "artifacts/pod_eval"
 DEFAULT_API_KEY = "EMPTY"
+OOM_TEXT_PATTERNS = (
+    "out of memory",
+    "cuda error: out of memory",
+    "cuda out of memory",
+    "hip out of memory",
+    "no available memory for the cache blocks",
+    "cudnn_status_alloc_failed",
+    "cublas_status_alloc_failed",
+)
 
 
 class VLLMStartupError(RuntimeError):
     pass
+
+
+def _positive_int(raw: str) -> int:
+    value = int(raw)
+    if value < 1:
+        raise argparse.ArgumentTypeError("value must be at least 1")
+    return value
+
+
+def _non_negative_int(raw: str) -> int:
+    value = int(raw)
+    if value < 0:
+        raise argparse.ArgumentTypeError("value must be at least 0")
+    return value
+
+
+def _gpu_memory_utilization(raw: str) -> float:
+    value = float(raw)
+    if value <= 0 or value > 1:
+        raise argparse.ArgumentTypeError("value must be > 0 and <= 1")
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +141,11 @@ def _tail_text(path: Path, line_count: int = 220) -> str:
         return ""
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     return "\n".join(lines[-line_count:])
+
+
+def _is_oom_text(text: str) -> bool:
+    lowered = text.lower()
+    return any(pattern in lowered for pattern in OOM_TEXT_PATTERNS)
 
 
 def _emit(log_file: Any, text: str = "") -> None:
@@ -248,6 +283,49 @@ def _vllm_command(
     return command
 
 
+def _apply_spec_overrides(spec: ModelSpec, args: argparse.Namespace) -> ModelSpec:
+    updated = spec
+    if args.max_model_len is not None:
+        updated = replace(updated, max_model_len=args.max_model_len)
+    if args.max_num_seqs is not None:
+        updated = replace(updated, max_num_seqs=args.max_num_seqs)
+    if args.gpu_memory_utilization is not None:
+        updated = replace(updated, gpu_memory_utilization=args.gpu_memory_utilization)
+    return updated
+
+
+def _reduce_spec_for_oom(
+    spec: ModelSpec,
+    *,
+    min_max_model_len: int,
+    min_gpu_memory_utilization: float,
+) -> tuple[ModelSpec | None, dict[str, dict[str, int | float]]]:
+    changes: dict[str, dict[str, int | float]] = {}
+    updated = spec
+
+    if updated.max_num_seqs > 1:
+        next_max_num_seqs = max(1, updated.max_num_seqs // 2)
+        if next_max_num_seqs < updated.max_num_seqs:
+            changes["max_num_seqs"] = {"from": updated.max_num_seqs, "to": next_max_num_seqs}
+            updated = replace(updated, max_num_seqs=next_max_num_seqs)
+
+    if updated.max_model_len > min_max_model_len:
+        next_max_model_len = max(min_max_model_len, updated.max_model_len // 2)
+        if next_max_model_len < updated.max_model_len:
+            changes["max_model_len"] = {"from": updated.max_model_len, "to": next_max_model_len}
+            updated = replace(updated, max_model_len=next_max_model_len)
+
+    next_gpu_memory_utilization = round(max(min_gpu_memory_utilization, updated.gpu_memory_utilization - 0.05), 2)
+    if next_gpu_memory_utilization < updated.gpu_memory_utilization:
+        changes["gpu_memory_utilization"] = {
+            "from": updated.gpu_memory_utilization,
+            "to": next_gpu_memory_utilization,
+        }
+        updated = replace(updated, gpu_memory_utilization=next_gpu_memory_utilization)
+
+    return (updated if changes else None), changes
+
+
 def _connect_host(host: str) -> str:
     if host in {"0.0.0.0", "::"}:
         return "127.0.0.1"
@@ -364,6 +442,7 @@ def _make_planner(
     planner_name: str,
     dataset_path: Path,
     spec: ModelSpec,
+    request_model: str | None,
     base_url: str,
     api_key: str,
     request_timeout: float,
@@ -373,7 +452,7 @@ def _make_planner(
     if planner_name != "openai":
         raise ValueError(f"Unsupported planner: {planner_name}")
     config = PlannerConfig(
-        model=spec.id,
+        model=request_model or spec.id,
         base_url=base_url,
         api_key=api_key,
         request_timeout=request_timeout,
@@ -389,6 +468,7 @@ def evaluate_model(
     dataset_path: Path,
     output_dir: Path,
     limit: int | None,
+    request_model: str | None,
     base_url: str,
     api_key: str,
     request_timeout: float,
@@ -403,6 +483,7 @@ def evaluate_model(
         planner_name=planner_name,
         dataset_path=dataset_path,
         spec=spec,
+        request_model=request_model,
         base_url=base_url,
         api_key=api_key,
         request_timeout=request_timeout,
@@ -426,6 +507,7 @@ def evaluate_model(
             "generation_config": spec.generation_config,
             "vllm_args": list(spec.vllm_args),
         },
+        "request_model": request_model or spec.id,
         "count": len(records),
         "exact_matches": 0,
         "compile_valid": 0,
@@ -446,6 +528,7 @@ def evaluate_model(
 
     with log_path.open("w", encoding="utf-8") as log_file:
         _emit(log_file, f"model: {spec.id}")
+        _emit(log_file, f"request_model: {request_model or spec.id}")
         _emit(log_file, f"display_name: {spec.display_name}")
         _emit(log_file, f"planner: {planner_name}")
         _emit(log_file, f"base_url: {base_url}")
@@ -552,78 +635,165 @@ def run_with_optional_server(
     spec: ModelSpec,
     args: argparse.Namespace,
 ) -> dict[str, Any]:
-    base_url = args.base_url
-    process: subprocess.Popen[Any] | None = None
-    server_log_path = args.output_dir / spec.slug / "vllm-server.log"
+    model_dir = args.output_dir / spec.slug
+    model_dir.mkdir(parents=True, exist_ok=True)
+    state_path = model_dir / "run_state.json"
+    state: dict[str, Any] = {
+        "started_at": _utc_now(),
+        "finished_at": None,
+        "status": "running",
+        "model": spec.id,
+        "planner": args.planner,
+        "dataset": str(args.dataset),
+        "request_model": args.request_model,
+        "base_url": args.base_url,
+        "output_dir": str(args.output_dir),
+        "oom_retries": args.oom_retries,
+        "attempts": [],
+    }
+    _write_json(state_path, state)
+
+    current_spec = _apply_spec_overrides(spec, args)
     api_key = args.api_key or DEFAULT_API_KEY
 
-    if args.planner == "openai" and base_url is None:
-        server_log_path.parent.mkdir(parents=True, exist_ok=True)
-        command = _vllm_command(
-            spec,
-            host=args.host,
-            port=args.port,
-            extra_args=args.vllm_arg or [],
-        )
-        print(f"starting vLLM for {spec.id}", flush=True)
-        print(" ".join(command), flush=True)
-        server_log_file = server_log_path.open("w", encoding="utf-8")
+    for attempt in range(1, args.oom_retries + 2):
+        process: subprocess.Popen[Any] | None = None
+        base_url = args.base_url
+        server_log_path = model_dir / "vllm-server.log"
+        attempt_state: dict[str, Any] = {
+            "attempt": attempt,
+            "started_at": _utc_now(),
+            "status": "running",
+            "model": {
+                "id": current_spec.id,
+                "max_model_len": current_spec.max_model_len,
+                "max_num_seqs": current_spec.max_num_seqs,
+                "gpu_memory_utilization": current_spec.gpu_memory_utilization,
+            },
+            "server_log_path": str(server_log_path),
+            "report_path": str(model_dir / "report.json"),
+        }
+        state["attempts"].append(attempt_state)
+        _write_json(state_path, state)
+
         try:
-            process = subprocess.Popen(
-                command,
-                stdout=server_log_file,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-            base_url = f"http://{_connect_host(args.host)}:{args.port}/v1"
-            wait_for_models(
-                base_url=base_url,
+            if args.planner == "openai" and base_url is None:
+                command = _vllm_command(
+                    current_spec,
+                    host=args.host,
+                    port=args.port,
+                    extra_args=args.vllm_arg or [],
+                )
+                print(f"starting vLLM for {current_spec.id}", flush=True)
+                print(" ".join(command), flush=True)
+                with server_log_path.open("w", encoding="utf-8") as server_log_file:
+                    process = subprocess.Popen(
+                        command,
+                        stdout=server_log_file,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                    )
+                    base_url = f"http://{_connect_host(args.host)}:{args.port}/v1"
+                    wait_for_models(
+                        base_url=base_url,
+                        api_key=api_key,
+                        startup_timeout=args.startup_timeout,
+                        process=process,
+                    )
+            elif args.planner == "openai":
+                wait_for_models(
+                    base_url=base_url,
+                    api_key=api_key,
+                    startup_timeout=args.startup_timeout,
+                    process=None,
+                )
+
+            report = evaluate_model(
+                spec=current_spec,
+                planner_name=args.planner,
+                dataset_path=args.dataset,
+                output_dir=args.output_dir,
+                limit=args.limit,
+                base_url=base_url or "gold://dataset",
                 api_key=api_key,
-                startup_timeout=args.startup_timeout,
-                process=process,
+                request_timeout=args.timeout,
+                request_model=args.request_model,
+                python_executable=args.python_executable,
             )
+            attempt_state["status"] = "completed"
+            attempt_state["finished_at"] = _utc_now()
+            attempt_state["artifact_path"] = report["artifact_path"]
+            state["status"] = "completed"
+            state["finished_at"] = attempt_state["finished_at"]
+            _write_json(state_path, state)
+            return report
         except Exception as exc:
             if process is not None:
                 stop_process(process)
-            server_log_file.close()
             tail = _tail_text(server_log_path)
+            combined = f"{exc}\n{tail}"
+            oom = _is_oom_text(combined)
+            attempt_state["finished_at"] = _utc_now()
+            attempt_state["status"] = "failed"
+            attempt_state["error"] = {
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "oom": oom,
+            }
+            if tail:
+                attempt_state["server_log_tail"] = tail
+
+            can_retry = args.planner == "openai" and args.base_url is None and oom and attempt <= args.oom_retries
+            if can_retry:
+                next_spec, changes = _reduce_spec_for_oom(
+                    current_spec,
+                    min_max_model_len=args.min_max_model_len,
+                    min_gpu_memory_utilization=args.min_gpu_memory_utilization,
+                )
+                if next_spec is not None:
+                    attempt_state["status"] = "retrying"
+                    attempt_state["retry_adjustments"] = changes
+                    print(
+                        f"retrying {current_spec.id} after OOM with adjustments: "
+                        f"{json.dumps(changes, ensure_ascii=False)}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    _write_json(state_path, state)
+
+                    report_path = model_dir / "report.json"
+                    eval_log_path = model_dir / "eval.log"
+                    if report_path.exists():
+                        report_path.replace(model_dir / f"report.attempt-{attempt}.json")
+                    if eval_log_path.exists():
+                        eval_log_path.replace(model_dir / f"eval.attempt-{attempt}.log")
+                    if server_log_path.exists():
+                        server_log_path.replace(model_dir / f"vllm-server.attempt-{attempt}.log")
+                    current_spec = next_spec
+                    continue
+
+            state["status"] = "failed"
+            state["finished_at"] = attempt_state["finished_at"]
+            _write_json(state_path, state)
             if tail:
                 print("vLLM server log tail:", file=sys.stderr)
                 print(tail, file=sys.stderr)
-                raise VLLMStartupError(
-                    f"{exc}\n\nvLLM server log tail from {server_log_path}:\n{tail}"
-                ) from exc
             raise
-        server_log_file.close()
-    elif args.planner == "openai":
-        wait_for_models(
-            base_url=base_url,
-            api_key=api_key,
-            startup_timeout=args.startup_timeout,
-            process=None,
-        )
+        finally:
+            if process is not None:
+                stop_process(process)
 
-    try:
-        return evaluate_model(
-            spec=spec,
-            planner_name=args.planner,
-            dataset_path=args.dataset,
-            output_dir=args.output_dir,
-            limit=args.limit,
-            base_url=base_url or "gold://dataset",
-            api_key=api_key,
-            request_timeout=args.timeout,
-            python_executable=args.python_executable,
-        )
-    finally:
-        if process is not None:
-            stop_process(process)
+    state["status"] = "failed"
+    state["finished_at"] = _utc_now()
+    _write_json(state_path, state)
+    raise RuntimeError(f"Could not evaluate {spec.id} after retry attempts")
 
 
 def _report_summary(report: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": report["model"]["id"],
         "display_name": report["model"]["display_name"],
+        "request_model": report.get("request_model", report["model"]["id"]),
         "status": "completed",
         "count": report["count"],
         "exact_match_rate": report["exact_match_rate"],
@@ -672,12 +842,49 @@ def _add_eval_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--planner", choices=["openai", "gold"], default="openai")
     parser.add_argument("--base-url", help="Use an already-running OpenAI-compatible endpoint instead of starting vLLM.")
+    parser.add_argument(
+        "--request-model",
+        help="Model name to send in planner requests when it differs from the manifest base model.",
+    )
     parser.add_argument("--api-key", default=DEFAULT_API_KEY)
     parser.add_argument("--timeout", type=float, default=90.0, help="Per-row OpenAI request timeout in seconds.")
     parser.add_argument("--startup-timeout", type=float, default=900.0, help="Seconds to wait for /v1/models.")
     parser.add_argument("--host", default="0.0.0.0", help="vLLM bind host.")
     parser.add_argument("--port", type=int, default=8000, help="vLLM port.")
     parser.add_argument("--python-executable", default=sys.executable)
+    parser.add_argument(
+        "--oom-retries",
+        type=_non_negative_int,
+        default=3,
+        help="Retry count after vLLM/model OOM with reduced serving settings.",
+    )
+    parser.add_argument(
+        "--min-max-model-len",
+        type=_positive_int,
+        default=512,
+        help="Lower bound when shrinking --max-model-len after OOM.",
+    )
+    parser.add_argument(
+        "--min-gpu-memory-utilization",
+        type=_gpu_memory_utilization,
+        default=0.55,
+        help="Lower bound when shrinking --gpu-memory-utilization after OOM.",
+    )
+    parser.add_argument(
+        "--max-model-len",
+        type=_positive_int,
+        help="Override manifest max model length for this run.",
+    )
+    parser.add_argument(
+        "--max-num-seqs",
+        type=_positive_int,
+        help="Override manifest max concurrent sequences for this run.",
+    )
+    parser.add_argument(
+        "--gpu-memory-utilization",
+        type=_gpu_memory_utilization,
+        help="Override manifest GPU memory utilization for this run.",
+    )
     parser.add_argument(
         "--vllm-arg",
         action="append",

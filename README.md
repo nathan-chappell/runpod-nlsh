@@ -9,9 +9,9 @@
 - A runner with clarification and confirmation gates
 - A shell runtime built on `find`, `qpdf`, and `jq`
 - Python helpers for CSV-to-JSON conversion and simple PDF text search
-- Seed `train/dev/test` message datasets for fine-tuning and eval
+- Coverage-organized message dataset for fine-tuning and eval
 - A starter Axolotl config for `microsoft/Phi-4-mini-instruct` LoRA
-- A pod eval image and manifest for sequential vLLM model comparisons
+- A pod eval image and manifest for sequential vLLM model comparisons plus a direct Phi-4 LoRA run
 
 ## Supported Actions
 
@@ -88,12 +88,12 @@ Compile a saved plan:
 Evaluate against the seed dataset:
 
 ```bash
-./.venv/bin/nlsh eval --planner gold --split test
+./.venv/bin/nlsh eval --planner gold
 ```
 
-## Pod Eval
+## Pod Eval And Fine-Tuning
 
-The pod eval flow builds on Runpod's PyTorch base image, adds the project, configs, datasets, system tools, and a compiler toolchain, then installs vLLM and model weights at pod startup into Runpod persistent storage. This keeps the pushed image from baking model weights while matching Runpod's GPU/CUDA environment.
+The pod eval and fine-tuning flow builds on Runpod's PyTorch base image, adds the project, configs, datasets, system tools, and a compiler toolchain, then installs vLLM and model weights at pod startup into Runpod persistent storage. This keeps the pushed image from baking model weights while matching Runpod's GPU/CUDA environment.
 
 ```bash
 docker build -f Dockerfile.pod-eval -t YOUR_DOCKERHUB_USER/nlsh-pod-eval:latest .
@@ -104,14 +104,26 @@ The default base is `runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404`. To try an
 
 Create a Runpod pod with:
 
-- GPU: RTX 4090
+- GPU: RTX 4090 or another 32 GB+ GPU
 - Image: `YOUR_DOCKERHUB_USER/nlsh-pod-eval:latest`
 - Persistent or network volume mounted at `/workspace`
 - `HF_TOKEN` set from a Runpod secret
 - Recommended volume size: at least 100 GB
 - Container disk: use 20 GB for the Runpod PyTorch base image. The model, vLLM, tmp, and cache data still live on `/workspace`, but the base image itself is large enough that 10 GB is likely too tight if Runpod counts image/root filesystem unpacking there.
 
-The image starts Runpod's base services when `/start.sh` is present, then starts a full dev eval automatically. On first boot it creates `/workspace/nlsh-venv`, installs vLLM there, downloads or reuses model weights in `/workspace/hf-cache`, keeps temp/Triton/vLLM caches under `/workspace`, writes reports to `/workspace/nlsh-artifacts`, records the final code in `/workspace/nlsh-artifacts/last_exit_code`, and then keeps the container alive for inspection. Set `POD_EVAL_EXIT_AFTER=1` to exit after the batch instead.
+The container `CMD` is `["python", "scripts/runpod_bootstrap.py"]`. The bootstrap stays stdlib-only so it can prepare the persistent Python environment before project dependencies are available. It starts Runpod's base-image services with `/start.sh` when present, creates or reuses `/workspace/nlsh-venv`, installs missing dependencies, then hands off to the Typer workflow at `python -m nlsh.pod_workflow run`.
+
+The Typer workflow logs the resolved configuration and execution plan, then:
+
+1. validates `HF_TOKEN` and enters `/opt/nlsh`
+2. starts all manifest model downloads in parallel
+3. evaluates models in priority order as each preferred model is ready: Phi-4, SmolLM3, then Qwen3
+4. installs training extras when needed and fine-tunes Phi-4-mini with `scripts/phi_4_training.py`
+5. serves the trained adapter with vLLM LoRA support and re-evaluates the fine-tuned Phi-4 adapter
+
+Baseline evals and training now keep incremental state on disk so a failure does not erase the run history. The workflow writes `/workspace/nlsh-artifacts/workflow_state.json`; each model eval writes `run_state.json`, `report.json`, and `eval.log`; OOM retries preserve prior attempt artifacts as `*.attempt-N.*`; and training writes `training_state.json` plus regular checkpoints under the output directory. Reports go to `/workspace/nlsh-artifacts`, the adapter goes to `/workspace/nlsh-finetune/phi-4-mini-instruct-lora`, and exit codes are recorded in `/workspace/nlsh-artifacts/last_eval_exit_code`, `/workspace/nlsh-artifacts/last_training_exit_code`, `/workspace/nlsh-artifacts/last_post_training_eval_exit_code`, and `/workspace/nlsh-artifacts/last_exit_code`. Set `POD_EVAL_EXIT_AFTER=1` to exit after the batch instead of keeping the container alive for inspection.
+
+The Runpod PyTorch base image may include `/start.sh` for base-image services such as SSH or notebook processes. Runpod's custom-template docs describe this as the base-service startup path, so the bootstrap runs it by default when it exists. Set `RUNPOD_START_BASE_SERVICES=0` only if you want application-only startup.
 
 Optional runtime knobs:
 
@@ -120,7 +132,14 @@ POD_EVAL_LIMIT=2
 POD_EVAL_TIMEOUT=90
 POD_EVAL_STARTUP_TIMEOUT=900
 POD_EVAL_VLLM_SPEC=vllm
-POD_EVAL_START_RUNPOD_SERVICES=1
+POD_EVAL_DOWNLOAD_WORKERS=3
+POD_EVAL_EVAL_ARGS="--oom-retries 3"
+RUNPOD_START_BASE_SERVICES=1
+POD_EVAL_RUN_BASELINE_EVAL=1
+POD_EVAL_RUN_TRAINING=1
+POD_EVAL_TRAIN_MODEL_ID=microsoft/Phi-4-mini-instruct
+POD_EVAL_TRAIN_OUTPUT_DIR=/workspace/nlsh-finetune/phi-4-mini-instruct-lora
+POD_EVAL_TRAIN_ARGS="--max-steps 200 --oom-retries 3"
 ```
 
 You can also run commands manually in the pod:
@@ -128,10 +147,11 @@ You can also run commands manually in the pod:
 ```bash
 export HF_HOME=/workspace/hf-cache
 python scripts/pod_eval.py download-models
-python scripts/pod_eval.py run-suite --dataset data/dev.messages.jsonl
+python scripts/pod_eval.py run-suite --dataset data/samples
+python -m nlsh.pod_workflow run --dry-run
 ```
 
-The manifest is `configs/pod_eval_models.json`. It currently runs `microsoft/Phi-4-mini-instruct`, `Qwen/Qwen3-8B`, and `HuggingFaceTB/SmolLM3-3B` sequentially through vLLM with conservative 24GB settings.
+The manifest is `configs/pod_eval_models.json`. It currently evaluates `microsoft/Phi-4-mini-instruct`, `HuggingFaceTB/SmolLM3-3B`, and `Qwen/Qwen3-8B` through vLLM with conservative single-GPU settings. Downloads run in parallel; eval stays sequential in the preferred order so one GPU is used predictably. If a vLLM startup or serve attempt fails with an OOM, `scripts/pod_eval.py` retries with smaller `max_num_seqs`, then shorter `max_model_len`, then lower `gpu_memory_utilization` until it hits the configured floor. If training hits an OOM, `scripts/phi_4_training.py` retries with smaller batch sizes, then shorter sequence length, resuming from the latest checkpoint when one exists.
 
 For local non-GPU checks, validate the manifest and exercise the eval path with the gold planner:
 
@@ -142,32 +162,29 @@ For local non-GPU checks, validate the manifest and exercise the eval path with 
 
 ## Dataset And Training
 
-The canonical examples live in:
-
-- `data/train.messages.jsonl`
-- `data/dev.messages.jsonl`
-- `data/test.messages.jsonl`
+The canonical, coverage-organized examples live in `data/samples/`; see `data/index.md` for the current map. Eval, pod eval, gold planning, and fine-tuning all default to this directory.
 
 Each row includes:
 
+- `focus`
 - `prompt`
 - `tags`
 - `messages`
 - `plan`
 
-For now, the active prompt-iteration set is `data/dev.messages.jsonl`, with 20 examples.
-
-For a direct single-GPU Phi-4-mini LoRA run on a 48 GB Runpod GPU, install the training extras in the pod and run the training script directly:
+For a direct single-GPU Phi-4-mini LoRA run on a 32 GB+ Runpod GPU, install the training extras in the pod and run the training script directly:
 
 ```bash
-pip install -e .[train]
+pip install -e '.[train]'
 python scripts/phi_4_training.py \
-  --train-dataset data/train.messages.jsonl \
-  --eval-dataset data/dev.messages.jsonl \
   --output-dir /workspace/nlsh-finetune/phi-4-mini-instruct-lora
 ```
 
+By default the training script deterministically partitions `data/samples/` into train/eval records. Use `--no-eval` to train on all canonical examples.
+
 The script uses regular bf16 LoRA by default, maps dataset `developer` messages to chat `system` messages, trains on prompt/completion examples, and starts with `target_modules=["qkv_proj"]`, `r=8`, `lora_alpha=16`, and `lora_dropout=0.05`. It tries FlashAttention 2 when installed and otherwise falls back to SDPA. Checkpoints go under `--output-dir/checkpoint-*`; the final PEFT adapter is saved directly in `--output-dir`.
+
+The next pod startup uses this script directly, not Axolotl. Set `POD_EVAL_RUN_TRAINING=0` if you only want baseline evals, or set `POD_EVAL_TRAIN_ARGS` to pass extra arguments such as `--max-steps 100` for a short smoke run.
 
 If the adapter underfits, widen LoRA gradually:
 

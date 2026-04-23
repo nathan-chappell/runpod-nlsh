@@ -6,7 +6,7 @@ adapter: lora
 strict: false
 
 datasets:
-  - path: data/train.messages.jsonl
+  - path: data/samples/plans/pipelines.jsonl
     ds_type: json
     type: chat_template
     field_messages: messages
@@ -26,7 +26,7 @@ datasets:
     train_on_eos: turn
 
 val_datasets:
-  - path: data/dev.messages.jsonl
+  - path: data/samples/plans/find_files.jsonl
     ds_type: json
     type: chat_template
     field_messages: messages

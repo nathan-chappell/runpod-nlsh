@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from nlsh.compiler import CompileError, compile_plan, required_tools_for_plan
-from nlsh.dataio import default_split_path
+from nlsh.dataio import default_dataset_path
 from nlsh.eval import evaluate_planner, write_eval_artifact
 from nlsh.planner import load_planner, plan_to_pretty_json
 from nlsh.preflight import MissingToolsError, ensure_required_tools
@@ -35,8 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     eval_parser = subparsers.add_parser("eval")
     eval_parser.add_argument("--planner", choices=["openai", "gold"], default="gold")
-    eval_parser.add_argument("--split", choices=["train", "dev", "test"], default="test")
-    eval_parser.add_argument("--dataset", type=Path)
+    eval_parser.add_argument("--dataset", type=Path, default=default_dataset_path())
     eval_parser.add_argument("--artifact-dir", type=Path, default=Path("artifacts/eval"))
 
     return parser
@@ -89,17 +88,17 @@ def command_compile(args: argparse.Namespace) -> int:
 
 
 def command_eval(args: argparse.Namespace) -> int:
-    dataset_path = args.dataset or default_split_path(args.split)
+    dataset_path = args.dataset
     planner = load_planner(args.planner, dataset_path=dataset_path if args.planner == "gold" else None)
     results = evaluate_planner(
         planner,
-        split=args.split,
         dataset_path=dataset_path,
+        label=dataset_path.name,
         python_executable=sys.executable,
     )
     artifact_path = write_eval_artifact(results, args.artifact_dir)
     print(json.dumps({
-        "split": results["split"],
+        "dataset": results["dataset_path"],
         "count": results["count"],
         "exact_match_rate": results["exact_match_rate"],
         "compile_valid_rate": results["compile_valid_rate"],

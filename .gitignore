@@ -7,5 +7,7 @@ __pycache__/
 *.egg-info/
 artifacts/
 tmp/
-.codex
+.codex/*
+!.codex/skills/
+!.codex/skills/**
 hf_test_result.txt

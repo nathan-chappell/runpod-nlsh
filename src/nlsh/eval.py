@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from nlsh.compiler import CompileError, compile_plan
-from nlsh.dataio import default_split_path, ensure_parent, load_jsonl
+from nlsh.dataio import default_dataset_path, ensure_parent, load_jsonl
 from nlsh.planner import Planner
 from nlsh.schema import PlanV1, PlannerOutput, normalize_plan, validate_plan_payload
 
@@ -38,18 +38,19 @@ def _flatten(obj: Any, prefix: str = "") -> dict[str, Any]:
     return items
 
 
-def load_eval_records(split: str = "test", dataset_path: Path | None = None) -> list[dict[str, Any]]:
-    path = dataset_path or default_split_path(split)
+def load_eval_records(dataset_path: Path | None = None) -> list[dict[str, Any]]:
+    path = dataset_path or default_dataset_path()
     return load_jsonl(path)
 
 
 def evaluate_planner(
     planner: Planner,
-    split: str = "test",
     dataset_path: Path | None = None,
+    label: str = "samples",
     python_executable: str = "python",
 ) -> dict[str, Any]:
-    raw_records = load_eval_records(split=split, dataset_path=dataset_path)
+    path = dataset_path or default_dataset_path()
+    raw_records = load_eval_records(dataset_path=path)
     items: list[EvalItem] = []
     total_slots = 0
     correct_slots = 0
@@ -88,8 +89,8 @@ def evaluate_planner(
         )
 
     results = {
-        "split": split,
-        "dataset_path": str(dataset_path or default_split_path(split)),
+        "dataset": label,
+        "dataset_path": str(path),
         "exact_match_rate": (sum(item.exact_match for item in items) / len(items)) if items else 0.0,
         "compile_valid_rate": (sum(item.compile_valid for item in items) / len(items)) if items else 0.0,
         "slot_accuracy": (correct_slots / total_slots) if total_slots else 0.0,
@@ -111,8 +112,8 @@ def evaluate_planner(
 
 def write_eval_artifact(results: dict[str, Any], output_dir: Path) -> Path:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    split = str(results.get("split", "eval"))
-    output_path = output_dir / f"{split}-eval-{timestamp}.json"
+    label = str(results.get("dataset", "samples"))
+    output_path = output_dir / f"{label}-eval-{timestamp}.json"
     latest_path = output_dir / "latest.json"
     ensure_parent(output_path)
     payload = json.dumps(results, indent=2, ensure_ascii=False)

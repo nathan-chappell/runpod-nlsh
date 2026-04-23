@@ -49,7 +49,7 @@ RUN mkdir -p /workspace/hf-cache /workspace/tmp /workspace/triton-cache /workspa
         qpdf \
     && rm -rf /var/lib/apt/lists/* \
     && python -m pip install --no-cache-dir -e . \
-    && chmod +x scripts/pod_eval.py scripts/runpod_pod_eval.sh
+    && chmod +x scripts/pod_eval.py scripts/runpod_bootstrap.py
 
 ENTRYPOINT []
-CMD ["bash", "scripts/runpod_pod_eval.sh"]
+CMD ["python", "scripts/runpod_bootstrap.py"]

@@ -16,13 +16,13 @@
       "trust_remote_code": true
     },
     {
-      "id": "Qwen/Qwen3-8B",
-      "display_name": "Qwen3 8B",
+      "id": "HuggingFaceTB/SmolLM3-3B",
+      "display_name": "SmolLM3 3B",
       "trust_remote_code": false
     },
     {
-      "id": "HuggingFaceTB/SmolLM3-3B",
-      "display_name": "SmolLM3 3B",
+      "id": "Qwen/Qwen3-8B",
+      "display_name": "Qwen3 8B",
       "trust_remote_code": false
     }
   ]

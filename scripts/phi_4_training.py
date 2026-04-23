@@ -4,23 +4,46 @@ from __future__ import annotations
 import argparse
 import inspect
 import json
+import math
 import os
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
+from nlsh.dataio import DEFAULT_EVAL_FRACTION, default_dataset_path, load_jsonl, partition_records
+
 
 DEFAULT_MODEL_ID = "microsoft/Phi-4-mini-instruct"
-DEFAULT_TRAIN_DATASET = Path("data/train.messages.jsonl")
-DEFAULT_EVAL_DATASET = Path("data/dev.messages.jsonl")
+DEFAULT_DATASET = Path("data/samples")
+OOM_TEXT_PATTERNS = (
+    "out of memory",
+    "cuda error: out of memory",
+    "cuda out of memory",
+    "hip out of memory",
+    "cudnn_status_alloc_failed",
+    "cublas_status_alloc_failed",
+    "insufficient memory",
+)
 
 
 @dataclass(frozen=True, slots=True)
 class PreparedDatasets:
     train: list[dict[str, Any]]
     eval: list[dict[str, Any]] | None
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f"{path.name}.tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp_path.replace(path)
 
 
 def default_output_dir() -> Path:
@@ -37,18 +60,25 @@ def parse_target_modules(raw: str) -> list[str]:
     return modules
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            try:
-                records.append(json.loads(stripped))
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"Invalid JSON in {path} at line {line_number}") from exc
-    return records
+def parse_eval_fraction(raw: str) -> float:
+    value = float(raw)
+    if value < 0 or value >= 1:
+        raise argparse.ArgumentTypeError("--eval-fraction must be >= 0 and < 1")
+    return value
+
+
+def parse_positive_int(raw: str) -> int:
+    value = int(raw)
+    if value < 1:
+        raise argparse.ArgumentTypeError("value must be at least 1")
+    return value
+
+
+def parse_non_negative_int(raw: str) -> int:
+    value = int(raw)
+    if value < 0:
+        raise argparse.ArgumentTypeError("value must be at least 0")
+    return value
 
 
 def _normalize_role(role: str) -> str:
@@ -92,11 +122,39 @@ def to_prompt_completion_record(record: dict[str, Any], *, row_number: int, path
 
 
 def load_prompt_completion_dataset(path: Path) -> list[dict[str, Any]]:
-    records = _read_jsonl(path)
+    records = load_jsonl(path)
+    return to_prompt_completion_records(records, path=path)
+
+
+def to_prompt_completion_records(records: list[dict[str, Any]], *, path: Path) -> list[dict[str, Any]]:
     return [
         to_prompt_completion_record(record, row_number=index, path=path)
         for index, record in enumerate(records, start=1)
     ]
+
+
+def prepare_datasets(args: argparse.Namespace) -> PreparedDatasets:
+    using_explicit_datasets = args.train_dataset is not None or args.eval_dataset is not None
+    if using_explicit_datasets:
+        if args.train_dataset is None:
+            raise ValueError("--train-dataset is required when --eval-dataset is set")
+        if not args.no_eval and args.eval_dataset is None:
+            raise ValueError("--eval-dataset is required with --train-dataset unless --no-eval is set")
+        return PreparedDatasets(
+            train=load_prompt_completion_dataset(args.train_dataset),
+            eval=None if args.no_eval else load_prompt_completion_dataset(args.eval_dataset),
+        )
+
+    records = load_jsonl(args.dataset)
+    if args.no_eval:
+        train_records = records
+        eval_records = None
+    else:
+        train_records, eval_records = partition_records(records, eval_fraction=args.eval_fraction)
+    return PreparedDatasets(
+        train=to_prompt_completion_records(train_records, path=args.dataset),
+        eval=None if eval_records is None else to_prompt_completion_records(eval_records, path=args.dataset),
+    )
 
 
 def configure_workspace_cache(workspace: Path | None) -> None:
@@ -119,8 +177,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Fine-tune Phi-4-mini-instruct on nlsh JSONL data with single-GPU LoRA.",
     )
     parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
-    parser.add_argument("--train-dataset", type=Path, default=DEFAULT_TRAIN_DATASET)
-    parser.add_argument("--eval-dataset", type=Path, default=DEFAULT_EVAL_DATASET)
+    parser.add_argument(
+        "--dataset",
+        type=Path,
+        default=DEFAULT_DATASET if DEFAULT_DATASET.exists() else default_dataset_path(),
+        help="Canonical JSONL file or directory to partition for training and eval.",
+    )
+    parser.add_argument("--train-dataset", type=Path, help="Explicit training JSONL file or directory.")
+    parser.add_argument("--eval-dataset", type=Path, help="Explicit eval JSONL file or directory.")
+    parser.add_argument("--eval-fraction", type=parse_eval_fraction, default=DEFAULT_EVAL_FRACTION)
     parser.add_argument("--output-dir", type=Path, default=default_output_dir())
     parser.add_argument("--workspace", type=Path, default=Path("/workspace") if Path("/workspace").exists() else None)
     parser.add_argument("--dry-run", action="store_true", help="Validate inputs and print the resolved config.")
@@ -147,13 +212,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warmup-ratio", type=float, default=0.03)
     parser.add_argument("--lr-scheduler-type", default="cosine")
     parser.add_argument("--logging-steps", type=int, default=10)
-    parser.add_argument("--save-steps", type=int, default=100)
+    parser.add_argument("--save-steps", type=int, default=10)
     parser.add_argument("--save-total-limit", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--resume-from-checkpoint", type=Path)
     parser.add_argument("--report-to", default="none")
     parser.add_argument("--dataset-num-proc", type=int, default=1)
     parser.add_argument("--overwrite-output-dir", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--oom-retries", type=parse_non_negative_int, default=3)
+    parser.add_argument("--min-train-batch-size", type=parse_positive_int, default=1)
+    parser.add_argument("--min-eval-batch-size", type=parse_positive_int, default=1)
+    parser.add_argument("--min-max-length", type=parse_positive_int, default=512)
     return parser
 
 
@@ -296,10 +365,12 @@ def _make_trainer_kwargs(
 def build_dry_run_payload(args: argparse.Namespace, datasets: PreparedDatasets) -> dict[str, Any]:
     return {
         "model_id": args.model_id,
-        "train_dataset": str(args.train_dataset),
+        "dataset": str(args.dataset),
+        "train_dataset": None if args.train_dataset is None else str(args.train_dataset),
         "train_records": len(datasets.train),
-        "eval_dataset": None if args.no_eval else str(args.eval_dataset),
+        "eval_dataset": None if args.no_eval or args.eval_dataset is None else str(args.eval_dataset),
         "eval_records": None if datasets.eval is None else len(datasets.eval),
+        "eval_fraction": args.eval_fraction,
         "output_dir": str(args.output_dir),
         "attn_implementation": args.attn_implementation,
         "torch_dtype": args.torch_dtype,
@@ -316,12 +387,15 @@ def build_dry_run_payload(args: argparse.Namespace, datasets: PreparedDatasets) 
         },
         "training": {
             "per_device_train_batch_size": args.per_device_train_batch_size,
+            "per_device_eval_batch_size": args.per_device_eval_batch_size,
             "gradient_accumulation_steps": args.gradient_accumulation_steps,
             "gradient_checkpointing": args.gradient_checkpointing,
             "learning_rate": args.learning_rate,
             "num_train_epochs": args.num_train_epochs,
+            "max_length": args.max_length,
             "save_steps": args.save_steps,
             "save_total_limit": args.save_total_limit,
+            "oom_retries": args.oom_retries,
         },
     }
 
@@ -382,15 +456,14 @@ def train(args: argparse.Namespace, datasets: PreparedDatasets) -> None:
     trainer.log_metrics("train", train_result.metrics)
     trainer.save_metrics("train", train_result.metrics)
     trainer.save_state()
+    trainer.save_model(str(args.output_dir))
+    tokenizer.save_pretrained(str(args.output_dir))
 
     if eval_dataset is not None:
         metrics = trainer.evaluate()
         metrics["eval_samples"] = len(eval_dataset)
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
-
-    trainer.save_model(str(args.output_dir))
-    tokenizer.save_pretrained(str(args.output_dir))
     info = {
         "base_model": args.model_id,
         "adapter_type": "lora",
@@ -404,22 +477,174 @@ def train(args: argparse.Namespace, datasets: PreparedDatasets) -> None:
     )
 
 
+def _is_oom_error(exc: Exception) -> bool:
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(pattern in text for pattern in OOM_TEXT_PATTERNS)
+
+
+def _clear_cuda_cache() -> None:
+    try:
+        import torch  # type: ignore
+    except ImportError:
+        return
+    if not torch.cuda.is_available():
+        return
+    try:
+        torch.cuda.empty_cache()
+        if hasattr(torch.cuda, "ipc_collect"):
+            torch.cuda.ipc_collect()
+    except Exception:
+        return
+
+
+def _latest_checkpoint(output_dir: Path) -> Path | None:
+    checkpoints = sorted(
+        output_dir.glob("checkpoint-*"),
+        key=lambda path: int(path.name.split("-", 1)[1]) if path.name.split("-", 1)[1].isdigit() else -1,
+    )
+    return checkpoints[-1] if checkpoints else None
+
+
+def _reduced_batch_size(current: int, minimum: int) -> int | None:
+    if current <= minimum:
+        return None
+    reduced = max(minimum, current // 2)
+    if reduced >= current:
+        reduced = current - 1
+    return reduced if reduced >= minimum else None
+
+
+def _reduce_training_footprint(args: argparse.Namespace) -> dict[str, dict[str, int]] | None:
+    changes: dict[str, dict[str, int]] = {}
+
+    next_train_batch = _reduced_batch_size(args.per_device_train_batch_size, args.min_train_batch_size)
+    if next_train_batch is not None:
+        previous_batch = args.per_device_train_batch_size
+        previous_accumulation = args.gradient_accumulation_steps
+        factor = max(1, math.ceil(previous_batch / next_train_batch))
+        args.per_device_train_batch_size = next_train_batch
+        args.gradient_accumulation_steps = max(1, previous_accumulation * factor)
+        changes["per_device_train_batch_size"] = {"from": previous_batch, "to": args.per_device_train_batch_size}
+        changes["gradient_accumulation_steps"] = {"from": previous_accumulation, "to": args.gradient_accumulation_steps}
+
+        next_eval_batch = _reduced_batch_size(args.per_device_eval_batch_size, args.min_eval_batch_size)
+        if next_eval_batch is not None:
+            previous_eval_batch = args.per_device_eval_batch_size
+            args.per_device_eval_batch_size = next_eval_batch
+            changes["per_device_eval_batch_size"] = {"from": previous_eval_batch, "to": args.per_device_eval_batch_size}
+        return changes
+
+    next_eval_batch = _reduced_batch_size(args.per_device_eval_batch_size, args.min_eval_batch_size)
+    if next_eval_batch is not None:
+        previous_eval_batch = args.per_device_eval_batch_size
+        args.per_device_eval_batch_size = next_eval_batch
+        changes["per_device_eval_batch_size"] = {"from": previous_eval_batch, "to": args.per_device_eval_batch_size}
+        return changes
+
+    if args.max_length > args.min_max_length:
+        previous_max_length = args.max_length
+        args.max_length = max(args.min_max_length, args.max_length // 2)
+        changes["max_length"] = {"from": previous_max_length, "to": args.max_length}
+        return changes
+
+    return None
+
+
+def _training_state_payload(args: argparse.Namespace, datasets: PreparedDatasets) -> dict[str, Any]:
+    return {
+        "started_at": _utc_now(),
+        "finished_at": None,
+        "status": "running",
+        "dataset": str(args.dataset),
+        "output_dir": str(args.output_dir),
+        "attempts": [],
+        "resolved_args": build_dry_run_payload(args, datasets),
+    }
+
+
+def train_with_retries(args: argparse.Namespace, datasets: PreparedDatasets) -> None:
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    state_path = args.output_dir / "training_state.json"
+    state = _training_state_payload(args, datasets)
+    _write_json(state_path, state)
+
+    for attempt in range(1, args.oom_retries + 2):
+        attempt_state: dict[str, Any] = {
+            "attempt": attempt,
+            "started_at": _utc_now(),
+            "status": "running",
+            "config": {
+                "per_device_train_batch_size": args.per_device_train_batch_size,
+                "per_device_eval_batch_size": args.per_device_eval_batch_size,
+                "gradient_accumulation_steps": args.gradient_accumulation_steps,
+                "max_length": args.max_length,
+                "resume_from_checkpoint": None if args.resume_from_checkpoint is None else str(args.resume_from_checkpoint),
+            },
+        }
+        state["attempts"].append(attempt_state)
+        state["resolved_args"] = build_dry_run_payload(args, datasets)
+        _write_json(state_path, state)
+
+        try:
+            train(args, datasets)
+            attempt_state["status"] = "completed"
+            attempt_state["finished_at"] = _utc_now()
+            state["status"] = "completed"
+            state["finished_at"] = attempt_state["finished_at"]
+            _write_json(state_path, state)
+            return
+        except Exception as exc:
+            attempt_state["finished_at"] = _utc_now()
+            attempt_state["error"] = {
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "oom": _is_oom_error(exc),
+            }
+            latest_checkpoint = _latest_checkpoint(args.output_dir)
+            if latest_checkpoint is not None:
+                attempt_state["latest_checkpoint"] = str(latest_checkpoint)
+
+            if _is_oom_error(exc):
+                _clear_cuda_cache()
+                changes = _reduce_training_footprint(args)
+                if changes is not None and attempt <= args.oom_retries:
+                    if latest_checkpoint is not None:
+                        args.resume_from_checkpoint = latest_checkpoint
+                    attempt_state["status"] = "retrying"
+                    attempt_state["retry_adjustments"] = changes
+                    print(
+                        f"retrying training after OOM with adjustments: "
+                        f"{json.dumps(changes, ensure_ascii=False)}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    state["resolved_args"] = build_dry_run_payload(args, datasets)
+                    _write_json(state_path, state)
+                    continue
+
+            attempt_state["status"] = "failed"
+            state["status"] = "failed"
+            state["finished_at"] = attempt_state["finished_at"]
+            _write_json(state_path, state)
+            raise
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
     configure_workspace_cache(args.workspace)
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
-    datasets = PreparedDatasets(
-        train=load_prompt_completion_dataset(args.train_dataset),
-        eval=None if args.no_eval else load_prompt_completion_dataset(args.eval_dataset),
-    )
+    try:
+        datasets = prepare_datasets(args)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     if args.dry_run:
         print(json.dumps(build_dry_run_payload(args, datasets), indent=2, ensure_ascii=False))
         return 0
 
-    train(args, datasets)
+    train_with_retries(args, datasets)
     return 0
 
 
