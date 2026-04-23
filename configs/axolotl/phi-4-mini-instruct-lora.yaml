@@ -58,9 +58,10 @@ warmup_ratio: 0.03
 bf16: true
 gradient_checkpointing: true
 
-lora_r: 16
-lora_alpha: 32
+lora_r: 8
+lora_alpha: 16
 lora_dropout: 0.05
-target_modules: all-linear
+target_modules:
+  - qkv_proj
 
 output_dir: outputs/phi-4-mini-instruct-nlsh-lora

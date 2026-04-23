@@ -157,7 +157,26 @@ Each row includes:
 
 For now, the active prompt-iteration set is `data/dev.messages.jsonl`, with 20 examples.
 
-The Axolotl starter config is at `configs/axolotl/phi-4-mini-instruct-lora.yaml`. It is intentionally small and meant for a demo LoRA run after the prompting and eval examples feel stable.
+For a direct single-GPU Phi-4-mini LoRA run on a 48 GB Runpod GPU, install the training extras in the pod and run the training script directly:
+
+```bash
+pip install -e .[train]
+python scripts/phi_4_training.py \
+  --train-dataset data/train.messages.jsonl \
+  --eval-dataset data/dev.messages.jsonl \
+  --output-dir /workspace/nlsh-finetune/phi-4-mini-instruct-lora
+```
+
+The script uses regular bf16 LoRA by default, maps dataset `developer` messages to chat `system` messages, trains on prompt/completion examples, and starts with `target_modules=["qkv_proj"]`, `r=8`, `lora_alpha=16`, and `lora_dropout=0.05`. It tries FlashAttention 2 when installed and otherwise falls back to SDPA. Checkpoints go under `--output-dir/checkpoint-*`; the final PEFT adapter is saved directly in `--output-dir`.
+
+If the adapter underfits, widen LoRA gradually:
+
+```bash
+python scripts/phi_4_training.py --target-modules qkv_proj,o_proj
+python scripts/phi_4_training.py --target-modules qkv_proj,o_proj,gate_up_proj,down_proj
+```
+
+The Axolotl starter config is at `configs/axolotl/phi-4-mini-instruct-lora.yaml`. It mirrors the conservative qkv-only LoRA defaults and is meant for a demo LoRA run after the prompting and eval examples feel stable.
 
 ## Notes
 
