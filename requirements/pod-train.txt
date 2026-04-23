@@ -2,5 +2,7 @@ accelerate==1.13.0
 datasets==4.8.4
 hf_transfer==0.1.9
 peft==0.19.1
-transformers==4.57.6
+# Keep this aligned with the SGLang runtime installed in the image.
+# Phi-4 training uses native Transformers classes by default instead of remote code.
+transformers==5.3.0
 trl==1.2.0

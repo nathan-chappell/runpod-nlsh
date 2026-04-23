@@ -97,19 +97,19 @@ The pod eval and fine-tuning flow builds on Runpod's PyTorch base image and inst
 
 ```bash
 docker build -f Dockerfile.pod-eval \
-  -t YOUR_DOCKERHUB_USER/runpod-nlsh:0.2.0 \
+  -t YOUR_DOCKERHUB_USER/runpod-nlsh:0.2.1 \
   -t YOUR_DOCKERHUB_USER/runpod-nlsh:latest .
-docker push YOUR_DOCKERHUB_USER/runpod-nlsh:0.2.0
+docker push YOUR_DOCKERHUB_USER/runpod-nlsh:0.2.1
 docker push YOUR_DOCKERHUB_USER/runpod-nlsh:latest
 ```
 
 The default base is `runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404`. To try another Runpod base, pass `--build-arg RUNPOD_BASE_IMAGE=...`.
-`requirements/pod-sglang.txt` pins `sglang==0.5.10.post1` and `sglang-kernel==0.4.1` so the image stays aligned with the base layer's Torch 2.9.1 and can reuse the PyTorch already bundled in the Runpod image.
+`requirements/pod-sglang.txt` pins `sglang==0.5.10.post1` and `sglang-kernel==0.4.1` so the image stays aligned with the base layer's Torch 2.9.1 and can reuse the PyTorch already bundled in the Runpod image. `requirements/pod-train.txt` matches that runtime by pinning `transformers==5.3.0`, and the training script uses native Transformers classes for Phi-4 by default instead of the Hub-hosted remote model code.
 
 Create a Runpod pod with:
 
 - GPU: RTX 4090 or another 32 GB+ GPU
-- Image: `YOUR_DOCKERHUB_USER/runpod-nlsh:0.2.0`
+- Image: `YOUR_DOCKERHUB_USER/runpod-nlsh:0.2.1`
 - Persistent or network volume mounted at `/workspace`
 - `HF_TOKEN` set from a Runpod secret
 - Recommended volume size: at least 100 GB
@@ -154,7 +154,7 @@ python scripts/pod_eval.py run-suite --dataset data/samples
 python -m nlsh.pod_workflow run --dry-run
 ```
 
-The manifest is `configs/pod_eval_models.json`. It currently evaluates `microsoft/Phi-4-mini-instruct`, `HuggingFaceTB/SmolLM3-3B`, and `Qwen/Qwen3-8B` through SGLang with conservative single-GPU settings. Downloads run in parallel; eval stays sequential in the preferred order so one GPU is used predictably. If an SGLang startup or serve attempt fails with an OOM, `scripts/pod_eval.py` retries with smaller `max_running_requests`, then shorter `context_length`, then lower `mem_fraction_static` until it hits the configured floor. If training hits an OOM, `scripts/phi_4_training.py` retries with smaller batch sizes, then shorter sequence length, resuming from the latest checkpoint when one exists.
+The manifest is `configs/pod_eval_models.json`. It currently evaluates `microsoft/Phi-4-mini-instruct`, `HuggingFaceTB/SmolLM3-3B`, and `Qwen/Qwen3-8B` through SGLang with conservative single-GPU settings. The default `sglang_args` disable CUDA graph capture and force Triton attention plus PyTorch sampling, which is a safer starting point on Runpod Blackwell/RTX 5090 pods using the CUDA 12.8 base image. Downloads run in parallel; eval stays sequential in the preferred order so one GPU is used predictably. If an SGLang startup or serve attempt fails with an OOM, `scripts/pod_eval.py` retries with smaller `max_running_requests`, then shorter `context_length`, then lower `mem_fraction_static` until it hits the configured floor. If training hits an OOM, `scripts/phi_4_training.py` retries with smaller batch sizes, then shorter sequence length, resuming from the latest checkpoint when one exists.
 
 For local non-GPU checks, validate the manifest and exercise the eval path with the gold planner:
 
@@ -185,7 +185,7 @@ python scripts/phi_4_training.py \
 
 By default the training script deterministically partitions `data/samples/` into train/eval records. Use `--no-eval` to train on all canonical examples.
 
-The script uses regular bf16 LoRA by default, maps dataset `developer` messages to chat `system` messages, trains on prompt/completion examples, and starts with `target_modules=["qkv_proj"]`, `r=8`, `lora_alpha=16`, and `lora_dropout=0.05`. It tries FlashAttention 2 when installed and otherwise falls back to SDPA. Checkpoints go under `--output-dir/checkpoint-*`; the final PEFT adapter is saved directly in `--output-dir`.
+The script uses regular bf16 LoRA by default, maps dataset `developer` messages to chat `system` messages, trains on prompt/completion examples, and starts with `target_modules=["qkv_proj"]`, `r=8`, `lora_alpha=16`, and `lora_dropout=0.05`. It defaults to `--no-trust-remote-code` for Phi-4 so it can use the native `transformers` `Phi3*` classes and avoid upstream remote-code drift. It tries FlashAttention 2 when installed and otherwise falls back to SDPA. Checkpoints go under `--output-dir/checkpoint-*`; the final PEFT adapter is saved directly in `--output-dir`.
 
 The next pod startup uses this script directly, not Axolotl. Set `POD_EVAL_RUN_TRAINING=0` if you only want baseline evals, or set `POD_EVAL_TRAIN_ARGS` to pass extra arguments such as `--max-steps 100` for a short smoke run.
 

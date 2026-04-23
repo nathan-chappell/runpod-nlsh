@@ -375,6 +375,7 @@ def build_dry_run_payload(args: TrainingArgs, datasets: PreparedDatasets) -> dic
         "output_dir": str(args.output_dir),
         "attn_implementation": args.attn_implementation,
         "torch_dtype": args.torch_dtype,
+        "trust_remote_code": args.trust_remote_code,
         "max_length": args.max_length,
         "packing": args.packing,
         "peft_config": {
@@ -642,7 +643,7 @@ def run(
     dry_run: bool = typer.Option(False, "--dry-run", help="Validate inputs and print the resolved config."),
     attn_implementation: str = typer.Option("auto", help="One of: auto, flash_attention_2, sdpa, eager."),
     torch_dtype: str = typer.Option("bf16", help="One of: bf16, fp16, fp32."),
-    trust_remote_code: bool = typer.Option(True, "--trust-remote-code/--no-trust-remote-code"),
+    trust_remote_code: bool = typer.Option(False, "--trust-remote-code/--no-trust-remote-code"),
     max_length: int = typer.Option(2048),
     packing: bool = typer.Option(False, "--packing/--no-packing"),
     no_eval: bool = typer.Option(False, "--no-eval"),

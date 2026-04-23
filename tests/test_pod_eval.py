@@ -196,7 +196,7 @@ def test_pod_requirements_split_runtime_training_and_sglang() -> None:
         "datasets==4.8.4",
         "hf_transfer==0.1.9",
         "peft==0.19.1",
-        "transformers==4.57.6",
+        "transformers==5.3.0",
         "trl==1.2.0",
     ]
     assert read_requirements("requirements/pod-sglang.txt") == [
@@ -318,7 +318,13 @@ def test_pod_eval_manifest_uses_conservative_sglang_defaults() -> None:
     assert manifest["defaults"]["context_length"] == 4096
     assert manifest["defaults"]["max_running_requests"] == 1
     assert manifest["defaults"]["mem_fraction_static"] == 0.85
-    assert manifest["defaults"]["sglang_args"] == []
+    assert manifest["defaults"]["sglang_args"] == [
+        "--disable-cuda-graph",
+        "--attention-backend",
+        "triton",
+        "--sampling-backend",
+        "pytorch",
+    ]
 
 
 def test_pod_workflow_requires_hf_token(tmp_path: Path) -> None:

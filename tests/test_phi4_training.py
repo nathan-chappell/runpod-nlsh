@@ -49,6 +49,7 @@ def test_phi4_training_dry_run() -> None:
     assert payload["dataset"] == "data/samples"
     assert payload["train_records"] == len(expected_records)
     assert payload["eval_records"] is None
+    assert payload["trust_remote_code"] is False
     assert payload["peft_config"]["r"] == 8
     assert payload["peft_config"]["lora_alpha"] == 16
     assert payload["peft_config"]["target_modules"] == ["qkv_proj"]

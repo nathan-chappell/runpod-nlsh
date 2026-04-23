@@ -385,6 +385,7 @@ class Workflow:
             str(self.config.train_output_dir),
             "--workspace",
             str(self.config.workspace_dir),
+            "--no-trust-remote-code",
         ]
         if self.config.train_dataset is not None:
             command.extend(["--train-dataset", str(self.config.train_dataset)])

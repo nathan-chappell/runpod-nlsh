@@ -3,7 +3,13 @@
     "context_length": 4096,
     "max_running_requests": 1,
     "mem_fraction_static": 0.85,
-    "sglang_args": []
+    "sglang_args": [
+      "--disable-cuda-graph",
+      "--attention-backend",
+      "triton",
+      "--sampling-backend",
+      "pytorch"
+    ]
   },
   "models": [
     {
