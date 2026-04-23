@@ -44,7 +44,7 @@ RUN mkdir -p /workspace/hf-cache /workspace/tmp /workspace/triton-cache /workspa
         python3-venv \
         qpdf \
     && rm -rf /var/lib/apt/lists/* \
-    && python -m venv /opt/nlsh-image-venv
+    && python -m venv --system-site-packages /opt/nlsh-image-venv
 
 RUN --mount=type=cache,target=/root/.cache/pip /opt/nlsh-image-venv/bin/python -m pip install --upgrade pip setuptools wheel
 RUN --mount=type=cache,target=/root/.cache/pip /opt/nlsh-image-venv/bin/python -m pip install -r requirements/pod-core.txt

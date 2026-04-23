@@ -93,11 +93,11 @@ Evaluate against the seed dataset:
 
 ## Pod Eval And Fine-Tuning
 
-The pod eval and fine-tuning flow builds on Runpod's PyTorch base image, adds the project, configs, datasets, system tools, and a compiler toolchain, then installs vLLM and model weights at pod startup into Runpod persistent storage. This keeps the pushed image from baking model weights while matching Runpod's GPU/CUDA environment.
+The pod eval and fine-tuning flow builds on Runpod's PyTorch base image, adds the project, configs, datasets, system tools, and a compiler toolchain, then bakes the Python dependency stack into `/opt/nlsh-image-venv`. That image venv is created with `--system-site-packages` so it can reuse the PyTorch already bundled in the Runpod base when the versions line up, while still leaving model weights and artifacts on `/workspace`.
 
 ```bash
-docker build -f Dockerfile.pod-eval -t YOUR_DOCKERHUB_USER/nlsh-pod-eval:latest .
-docker push YOUR_DOCKERHUB_USER/nlsh-pod-eval:latest
+docker build -f Dockerfile.pod-eval -t YOUR_DOCKERHUB_USER/runpod-nlsh:latest .
+docker push YOUR_DOCKERHUB_USER/runpod-nlsh:latest
 ```
 
 The default base is `runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404`. To try another Runpod base, pass `--build-arg RUNPOD_BASE_IMAGE=...`.
@@ -105,13 +105,13 @@ The default base is `runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404`. To try an
 Create a Runpod pod with:
 
 - GPU: RTX 4090 or another 32 GB+ GPU
-- Image: `YOUR_DOCKERHUB_USER/nlsh-pod-eval:latest`
+- Image: `YOUR_DOCKERHUB_USER/runpod-nlsh:latest`
 - Persistent or network volume mounted at `/workspace`
 - `HF_TOKEN` set from a Runpod secret
 - Recommended volume size: at least 100 GB
 - Container disk: use 20 GB for the Runpod PyTorch base image. The model, vLLM, tmp, and cache data still live on `/workspace`, but the base image itself is large enough that 10 GB is likely too tight if Runpod counts image/root filesystem unpacking there.
 
-The container `CMD` is `["python", "scripts/runpod_bootstrap.py"]`. Heavy Python dependencies are baked into the image from `requirements/pod-core.txt`, `requirements/pod-train.txt`, and `requirements/pod-vllm.txt`. The bootstrap stays stdlib-only, keeps a small runtime venv at `/workspace/nlsh-venv`, and writes `.pth` links there for `/opt/nlsh/src` and the image dependency venv at `/opt/nlsh-image-venv`. It also records a bootstrap state version in `/workspace/.nlsh-bootstrap-version`; if that version changes in a future image, the bootstrap removes the old workspace venv once and recreates it before continuing. Normal pod startup should not need any runtime `pip install`.
+The container `CMD` is `["python", "scripts/runpod_bootstrap.py"]`. Heavy Python dependencies are baked into the image from `requirements/pod-core.txt`, `requirements/pod-train.txt`, and `requirements/pod-vllm.txt`. The bootstrap stays stdlib-only, keeps a small runtime venv at `/workspace/nlsh-venv`, and writes `.pth` links there for `/opt/nlsh/src`, the image dependency venv at `/opt/nlsh-image-venv`, and any inherited base-image site-packages that the image venv exposes. It also records a bootstrap state version in `/workspace/.nlsh-bootstrap-version`; if that version changes in a future image, the bootstrap removes the old workspace venv once and recreates it before continuing. Normal pod startup should not need any runtime `pip install`.
 
 The Typer workflow logs the resolved configuration and execution plan, then:
 

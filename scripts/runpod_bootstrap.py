@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -51,6 +52,36 @@ def _site_packages_dir(venv_dir: Path) -> Path:
 def _write_text(path: Path, contents: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(contents, encoding="utf-8")
+
+
+def _image_dependency_paths() -> list[Path]:
+    image_site_packages = _site_packages_dir(IMAGE_VENV_DIR)
+    image_python = IMAGE_VENV_DIR / "bin/python"
+    paths = [image_site_packages]
+
+    if not image_python.exists():
+        return paths
+
+    try:
+        result = subprocess.run(
+            [
+                str(image_python),
+                "-c",
+                "import json, site; print(json.dumps(site.getsitepackages()))",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        discovered_paths = json.loads(result.stdout)
+    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError):
+        return paths
+
+    for raw_path in discovered_paths:
+        candidate = Path(raw_path)
+        if candidate.exists() and candidate not in paths:
+            paths.append(candidate)
+    return paths
 
 
 def _ensure_workspace() -> None:
@@ -110,7 +141,10 @@ def _sync_runtime_paths() -> None:
     _write_text(workspace_site_packages / SOURCE_PTH_FILENAME, str(source_dir) + "\n")
     _write_text(
         workspace_site_packages / IMAGE_DEPS_PTH_FILENAME,
-        f"import site; site.addsitedir({str(image_site_packages)!r})\n",
+        "".join(
+            f"import site; site.addsitedir({str(path)!r})\n"
+            for path in _image_dependency_paths()
+        ),
     )
 
 

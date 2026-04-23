@@ -122,7 +122,7 @@ def test_pod_eval_dockerfile_uses_runpod_base() -> None:
     assert dockerfile.index("COPY requirements ./requirements") < dockerfile.index("COPY src ./src")
     assert "PIP_DISABLE_PIP_VERSION_CHECK=1" in dockerfile
     assert "PIP_NO_CACHE_DIR=1" not in dockerfile
-    assert "python -m venv /opt/nlsh-image-venv" in dockerfile
+    assert "python -m venv --system-site-packages /opt/nlsh-image-venv" in dockerfile
     assert "--mount=type=cache,target=/root/.cache/pip" in dockerfile
     assert "requirements/pod-core.txt" in dockerfile
     assert "requirements/pod-train.txt" in dockerfile
@@ -146,6 +146,7 @@ def test_runpod_bootstrap_uses_volume_caches_and_base_services() -> None:
     assert 'os.environ.setdefault("CC", "/usr/bin/gcc")' in script
     assert '_env_bool("POD_EVAL_START_RUNPOD_SERVICES", True)' in script
     assert 'Path("/start.sh")' in script
+    assert "site.getsitepackages()" in script
     assert '"-m", "nlsh.pod_workflow", "run"' in script
     assert 'shutil.rmtree(VENV_DIR)' in script
     assert "_site_packages_dir(IMAGE_VENV_DIR)" in script
@@ -212,9 +213,11 @@ def test_runpod_bootstrap_writes_runtime_pth_files(tmp_path: Path, monkeypatch: 
     app_dir = tmp_path / "app"
     source_dir = app_dir / "src"
     image_venv_dir = tmp_path / "image-venv"
+    base_site_packages = tmp_path / "base-site-packages"
 
     source_dir.mkdir(parents=True)
     module._site_packages_dir(image_venv_dir).mkdir(parents=True)
+    base_site_packages.mkdir()
 
     monkeypatch.setattr(module, "APP_DIR", app_dir)
     monkeypatch.setattr(module, "WORKSPACE_DIR", workspace_dir)
@@ -223,6 +226,11 @@ def test_runpod_bootstrap_writes_runtime_pth_files(tmp_path: Path, monkeypatch: 
     monkeypatch.setattr(module, "IMAGE_VENV_DIR", image_venv_dir)
     monkeypatch.setattr(module, "BOOTSTRAP_VERSION_FILE", workspace_dir / ".nlsh-bootstrap-version")
     monkeypatch.setattr(module, "BOOTSTRAP_PYTHON", sys.executable)
+    monkeypatch.setattr(
+        module,
+        "_image_dependency_paths",
+        lambda: [module._site_packages_dir(image_venv_dir), base_site_packages],
+    )
 
     module._ensure_workspace()
     python_bin = module._prepare_python()
@@ -233,6 +241,7 @@ def test_runpod_bootstrap_writes_runtime_pth_files(tmp_path: Path, monkeypatch: 
     image_pth = (workspace_site_packages / module.IMAGE_DEPS_PTH_FILENAME).read_text(encoding="utf-8")
     assert "site.addsitedir(" in image_pth
     assert str(module._site_packages_dir(image_venv_dir)) in image_pth
+    assert str(base_site_packages) in image_pth
     assert module.BOOTSTRAP_VERSION_FILE.read_text(encoding="utf-8").strip() == module.BOOTSTRAP_STATE_VERSION
 
 
@@ -264,6 +273,47 @@ def test_runpod_bootstrap_resets_stale_workspace_venv(tmp_path: Path, monkeypatc
 
     assert python_bin.exists()
     assert not stale_marker.exists()
+
+
+def test_runpod_bootstrap_discovers_inherited_image_site_packages(tmp_path: Path, monkeypatch: Any) -> None:
+    module = load_runpod_bootstrap_module()
+    image_venv_dir = tmp_path / "image-venv"
+    image_site_packages = module._site_packages_dir(image_venv_dir)
+    inherited_site_packages = tmp_path / "base-site-packages"
+    image_python = image_venv_dir / "bin" / "python"
+
+    image_site_packages.mkdir(parents=True)
+    inherited_site_packages.mkdir()
+    image_python.parent.mkdir(parents=True)
+    image_python.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(module, "IMAGE_VENV_DIR", image_venv_dir)
+
+    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        assert command == [
+            str(image_python),
+            "-c",
+            "import json, site; print(json.dumps(site.getsitepackages()))",
+        ]
+        assert kwargs["check"] is True
+        assert kwargs["capture_output"] is True
+        assert kwargs["text"] is True
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(
+                [
+                    str(image_site_packages),
+                    str(inherited_site_packages),
+                    str(inherited_site_packages),
+                ]
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module._image_dependency_paths() == [image_site_packages, inherited_site_packages]
 
 
 def test_runpod_startup_python_syntax() -> None:
