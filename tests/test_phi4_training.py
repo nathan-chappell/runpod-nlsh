@@ -1,5 +1,5 @@
-import importlib.util
 import argparse
+import importlib.util
 import json
 import subprocess
 import sys
@@ -77,7 +77,7 @@ def test_phi4_training_maps_developer_to_system() -> None:
         "messages": [
             {"role": "developer", "content": "Return JSON only."},
             {"role": "user", "content": "find pdfs"},
-            {"role": "assistant", "content": "{\"kind\":\"plan\",\"steps\":[]}"},
+            {"role": "assistant", "content": '{"kind":"plan","steps":[]}'},
         ]
     }
 
@@ -88,9 +88,7 @@ def test_phi4_training_maps_developer_to_system() -> None:
             {"role": "system", "content": "Return JSON only."},
             {"role": "user", "content": "find pdfs"},
         ],
-        "completion": [
-            {"role": "assistant", "content": "{\"kind\":\"plan\",\"steps\":[]}"}
-        ],
+        "completion": [{"role": "assistant", "content": '{"kind":"plan","steps":[]}'}],
     }
 
 

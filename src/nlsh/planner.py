@@ -78,9 +78,7 @@ class PlannerConfig:
         force_vllm_like = _env_bool("NLSH_VLLM_LIKE")
         return cls(
             model=os.environ.get("NLSH_MODEL", "microsoft/Phi-4-mini-instruct"),
-            base_url=os.environ.get(
-                "NLSH_BASE_URL", "https://router.huggingface.co/v1"
-            ),
+            base_url=os.environ.get("NLSH_BASE_URL", "https://router.huggingface.co/v1"),
             api_key=api_key,
             request_timeout=float(os.environ.get("NLSH_REQUEST_TIMEOUT", "60")),
             force_vllm_like=force_vllm_like,
@@ -174,11 +172,7 @@ def _coerce_step_payload(step: Any) -> Any:
 
     coerced = {key: value for key, value in step.items() if key not in PLAN_LEVEL_KEYS}
     nested_kind = next(
-        (
-            key
-            for key, value in coerced.items()
-            if key in STEP_KINDS and isinstance(value, dict)
-        ),
+        (key for key, value in coerced.items() if key in STEP_KINDS and isinstance(value, dict)),
         None,
     )
     if "kind" not in coerced and nested_kind is not None:
@@ -208,9 +202,7 @@ def _coerce_step_payload(step: Any) -> Any:
             elif name_pattern is not None:
                 coerced["glob"] = name_pattern
             elif extension is not None:
-                normalized_ext = (
-                    extension if str(extension).startswith(".") else f".{extension}"
-                )
+                normalized_ext = extension if str(extension).startswith(".") else f".{extension}"
                 if path_contains:
                     coerced["glob"] = f"*{path_contains}*{normalized_ext}"
                 else:
@@ -267,9 +259,7 @@ class OpenAIPlanner:
     def __init__(self, config: PlannerConfig | None = None) -> None:
         self.config = config or PlannerConfig.from_env()
         if not self.config.api_key:
-            raise ValueError(
-                "Set NLSH_API_KEY or HF_TOKEN before using the OpenAI planner."
-            )
+            raise ValueError("Set NLSH_API_KEY or HF_TOKEN before using the OpenAI planner.")
 
     def _request_kwargs(
         self,
@@ -359,9 +349,7 @@ class OpenAIPlanner:
                 error=error,
             )
             if not repaired_text:
-                raise ValueError(
-                    "Planner returned empty content while attempting to repair invalid JSON."
-                )
+                raise ValueError("Planner returned empty content while attempting to repair invalid JSON.")
             return _validate_or_coerce_plan_payload(repaired_text)
 
 
@@ -369,10 +357,7 @@ class GoldPlanner:
     def __init__(self, dataset_path: Path | None = None) -> None:
         path = dataset_path or default_dataset_path()
         self.records = load_jsonl(path)
-        self.prompt_to_plan = {
-            record["prompt"].strip(): validate_plan_payload(record["plan"])
-            for record in self.records
-        }
+        self.prompt_to_plan = {record["prompt"].strip(): validate_plan_payload(record["plan"]) for record in self.records}
 
     def plan(self, prompt: str) -> PlannerOutput:
         key = prompt.strip()

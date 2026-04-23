@@ -97,14 +97,19 @@ def command_eval(args: argparse.Namespace) -> int:
         python_executable=sys.executable,
     )
     artifact_path = write_eval_artifact(results, args.artifact_dir)
-    print(json.dumps({
-        "dataset": results["dataset_path"],
-        "count": results["count"],
-        "exact_match_rate": results["exact_match_rate"],
-        "compile_valid_rate": results["compile_valid_rate"],
-        "slot_accuracy": results["slot_accuracy"],
-        "artifact": str(artifact_path),
-    }, indent=2))
+    print(
+        json.dumps(
+            {
+                "dataset": results["dataset_path"],
+                "count": results["count"],
+                "exact_match_rate": results["exact_match_rate"],
+                "compile_valid_rate": results["compile_valid_rate"],
+                "slot_accuracy": results["slot_accuracy"],
+                "artifact": str(artifact_path),
+            },
+            indent=2,
+        )
+    )
     return 0
 
 

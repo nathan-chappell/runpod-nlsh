@@ -9,7 +9,7 @@ from typing import Any
 from nlsh.compiler import CompileError, compile_plan
 from nlsh.dataio import default_dataset_path, ensure_parent, load_jsonl
 from nlsh.planner import Planner
-from nlsh.schema import PlanV1, PlannerOutput, normalize_plan, validate_plan_payload
+from nlsh.schema import PlannerOutput, PlanV1, normalize_plan, validate_plan_payload
 
 
 @dataclass(slots=True)

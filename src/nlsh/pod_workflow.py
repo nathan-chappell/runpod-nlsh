@@ -16,7 +16,6 @@ from typing import Any
 
 import typer
 
-
 DEFAULT_MODEL_ORDER = (
     "microsoft/Phi-4-mini-instruct",
     "HuggingFaceTB/SmolLM3-3B",

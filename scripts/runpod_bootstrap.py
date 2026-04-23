@@ -7,7 +7,6 @@ import sys
 import time
 from pathlib import Path
 
-
 APP_DIR = Path(os.environ.get("POD_EVAL_APP_DIR", "/opt/nlsh"))
 WORKSPACE_DIR = Path(os.environ.get("POD_EVAL_WORKSPACE", "/workspace"))
 ARTIFACT_DIR = Path(os.environ.get("POD_EVAL_OUTPUT_DIR", WORKSPACE_DIR / "nlsh-artifacts"))

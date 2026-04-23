@@ -8,7 +8,6 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-
 BOOTSTRAP_SCRIPT = Path("scripts/runpod_bootstrap.py")
 
 
@@ -214,7 +213,6 @@ def test_pod_workflow_dry_run(tmp_path: Path) -> None:
 
 
 def test_pod_workflow_runs_eval_then_training_then_post_training_eval(tmp_path: Path, monkeypatch: Any) -> None:
-    from nlsh import pod_workflow
     from nlsh.pod_workflow import Workflow, WorkflowConfig
 
     order: list[str] = []
