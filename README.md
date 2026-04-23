@@ -111,7 +111,7 @@ Create a Runpod pod with:
 - Recommended volume size: at least 100 GB
 - Container disk: use 20 GB for the Runpod PyTorch base image. The model, vLLM, tmp, and cache data still live on `/workspace`, but the base image itself is large enough that 10 GB is likely too tight if Runpod counts image/root filesystem unpacking there.
 
-The container `CMD` is `["python", "scripts/runpod_bootstrap.py"]`. The bootstrap stays stdlib-only so it can prepare the persistent Python environment before project dependencies are available. On first startup it creates `/workspace/nlsh-venv`, installs the project with training extras plus `vllm` into that venv, then reuses the venv on later starts. After that it hands off to the Typer workflow at `python -m nlsh.pod_workflow run`.
+The container `CMD` is `["python", "scripts/runpod_bootstrap.py"]`. The bootstrap stays stdlib-only so it can prepare the persistent Python environment before project dependencies are available. On first startup it creates `/workspace/nlsh-venv`, installs the project with training extras plus `vllm` into that venv in one pip transaction, then reuses the venv on later starts. After that it hands off to the Typer workflow at `python -m nlsh.pod_workflow run`.
 
 The Typer workflow logs the resolved configuration and execution plan, then:
 

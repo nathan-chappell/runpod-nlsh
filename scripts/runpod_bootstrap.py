@@ -13,7 +13,7 @@ ARTIFACT_DIR = Path(os.environ.get("POD_EVAL_OUTPUT_DIR", WORKSPACE_DIR / "nlsh-
 VENV_DIR = Path(os.environ.get("POD_EVAL_VENV", WORKSPACE_DIR / "nlsh-venv"))
 BOOTSTRAP_PYTHON = os.environ.get("POD_EVAL_BOOTSTRAP_PYTHON", sys.executable)
 PROJECT_SPEC = ".[train]"
-VLLM_PACKAGE = "vllm"
+BOOTSTRAP_PACKAGES = (PROJECT_SPEC, "vllm")
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -89,8 +89,7 @@ def _prepare_python() -> Path:
     _log(f"creating persistent Python environment at {VENV_DIR}")
     _run([BOOTSTRAP_PYTHON, "-m", "venv", str(VENV_DIR)])
     _run([str(python_bin), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
-    _run([str(python_bin), "-m", "pip", "install", "-e", PROJECT_SPEC], cwd=APP_DIR)
-    _run([str(python_bin), "-m", "pip", "install", VLLM_PACKAGE], cwd=APP_DIR)
+    _run([str(python_bin), "-m", "pip", "install", "-e", *BOOTSTRAP_PACKAGES], cwd=APP_DIR)
 
     return python_bin
 

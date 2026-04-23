@@ -116,9 +116,8 @@ def test_runpod_bootstrap_uses_volume_caches_and_base_services() -> None:
     assert 'Path("/start.sh")' in script
     assert '"-m", "nlsh.pod_workflow", "run"' in script
     assert 'PROJECT_SPEC = ".[train]"' in script
-    assert 'VLLM_PACKAGE = "vllm"' in script
-    assert '"-m", "pip", "install", "-e", PROJECT_SPEC' in script
-    assert '"-m", "pip", "install", VLLM_PACKAGE' in script
+    assert 'BOOTSTRAP_PACKAGES = (PROJECT_SPEC, "vllm")' in script
+    assert '"-m", "pip", "install", "-e", *BOOTSTRAP_PACKAGES' in script
     assert "_module_available" not in script
 
 

@@ -114,3 +114,56 @@ def test_coerce_plan_payload_defaults_missing_kind_to_plan() -> None:
     plan = PlanV1.model_validate(_coerce_plan_payload(payload))
 
     assert plan.kind == "plan"
+
+
+def test_coerce_plan_payload_wraps_top_level_step_in_plan() -> None:
+    payload = {
+        "kind": "csv_to_json",
+        "input_file": "orders.csv",
+        "output_file": "orders.json",
+    }
+
+    plan = PlanV1.model_validate(_coerce_plan_payload(payload))
+    step = plan.steps[0]
+
+    assert plan.kind == "plan"
+    assert step.kind == "csv_to_json"
+    assert step.input_file == "orders.csv"
+    assert step.output_file == "orders.json"
+
+
+def test_coerce_plan_payload_normalizes_pascal_case_step_kind() -> None:
+    payload = {
+        "kind": "FindFilesStep",
+        "root": "./exports",
+        "glob": "*.csv",
+        "max_depth": 1,
+    }
+
+    plan = PlanV1.model_validate(_coerce_plan_payload(payload))
+    step = plan.steps[0]
+
+    assert step.kind == "find_files"
+    assert step.root == "./exports"
+    assert step.glob == "*.csv"
+    assert step.max_depth == 1
+
+
+def test_coerce_plan_payload_converts_group_by_string_to_list() -> None:
+    payload = {
+        "kind": "plan",
+        "steps": [
+            {
+                "kind": "json_group_count",
+                "input_file": "customers.json",
+                "group_by": "country",
+                "output_file": "customer_country_counts.json",
+            }
+        ],
+    }
+
+    plan = PlanV1.model_validate(_coerce_plan_payload(payload))
+    step = plan.steps[0]
+
+    assert step.kind == "json_group_count"
+    assert step.group_by == ["country"]

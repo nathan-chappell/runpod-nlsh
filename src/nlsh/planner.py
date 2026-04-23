@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
@@ -179,7 +180,16 @@ def _coerce_step_payload(step: Any) -> Any:
         nested_payload = dict(coerced.pop(nested_kind))
         coerced = {"kind": nested_kind, **nested_payload, **coerced}
 
-    if coerced.get("kind") == "find_files":
+    kind = coerced.get("kind")
+    if isinstance(kind, str):
+        normalized_kind = kind
+        if normalized_kind not in STEP_KINDS and normalized_kind.endswith("Step"):
+            normalized_kind = re.sub(r"(?<!^)(?=[A-Z])", "_", normalized_kind[:-4]).lower()
+        if normalized_kind in STEP_KINDS:
+            coerced["kind"] = normalized_kind
+            kind = normalized_kind
+
+    if kind == "find_files":
         roots = coerced.pop("roots", None)
         if roots is not None and "root" not in coerced:
             coerced["root"] = roots[0] if isinstance(roots, list) and roots else roots
@@ -209,11 +219,23 @@ def _coerce_step_payload(step: Any) -> Any:
                     coerced["glob"] = f"*{normalized_ext}"
             elif path_contains is not None:
                 coerced["glob"] = f"*{path_contains}*"
+    elif kind == "json_group_count" and isinstance(coerced.get("group_by"), str):
+        coerced["group_by"] = [coerced["group_by"]]
     return coerced
 
 
 def _coerce_plan_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    coerced = dict(payload)
+    coerced = {key: value for key, value in payload.items() if key not in PLAN_LEVEL_KEYS}
+    candidate_step = _coerce_step_payload(coerced)
+    if (
+        isinstance(candidate_step, dict)
+        and candidate_step.get("kind") in STEP_KINDS
+        and "steps" not in coerced
+        and "question" not in coerced
+        and "clarifying_question" not in coerced
+    ):
+        return {"kind": "plan", "steps": [candidate_step]}
+
     if "kind" not in coerced:
         if "clarifying_question" in coerced:
             return {"kind": "clarification", "question": coerced["clarifying_question"]}
