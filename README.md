@@ -93,10 +93,13 @@ Evaluate against the seed dataset:
 
 ## Pod Eval And Fine-Tuning
 
-The pod eval and fine-tuning flow builds on Runpod's PyTorch base image, adds the project, configs, datasets, system tools, and a compiler toolchain, then bakes the Python dependency stack into `/opt/nlsh-image-venv`. That image venv is created with `--system-site-packages` so it can reuse the PyTorch already bundled in the Runpod base when the versions line up, while still leaving model weights and artifacts on `/workspace`.
+The pod eval and fine-tuning flow builds on Runpod's PyTorch base image and installs the project plus the full Python dependency stack during `docker build`. Pod startup stays lightweight: it prepares `/workspace`, starts Runpod base services through `/start.sh` when available, and then hands off to the workflow. Mutable state such as Hugging Face cache, downloaded models, checkpoints, and eval artifacts lives on `/workspace`; Python packages do not.
 
 ```bash
-docker build -f Dockerfile.pod-eval -t YOUR_DOCKERHUB_USER/runpod-nlsh:latest .
+docker build -f Dockerfile.pod-eval \
+  -t YOUR_DOCKERHUB_USER/runpod-nlsh:1.6 \
+  -t YOUR_DOCKERHUB_USER/runpod-nlsh:latest .
+docker push YOUR_DOCKERHUB_USER/runpod-nlsh:1.6
 docker push YOUR_DOCKERHUB_USER/runpod-nlsh:latest
 ```
 
@@ -105,13 +108,13 @@ The default base is `runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404`. To try an
 Create a Runpod pod with:
 
 - GPU: RTX 4090 or another 32 GB+ GPU
-- Image: `YOUR_DOCKERHUB_USER/runpod-nlsh:latest`
+- Image: `YOUR_DOCKERHUB_USER/runpod-nlsh:1.6`
 - Persistent or network volume mounted at `/workspace`
 - `HF_TOKEN` set from a Runpod secret
 - Recommended volume size: at least 100 GB
 - Container disk: use 20 GB for the Runpod PyTorch base image. The model, vLLM, tmp, and cache data still live on `/workspace`, but the base image itself is large enough that 10 GB is likely too tight if Runpod counts image/root filesystem unpacking there.
 
-The container `CMD` is `["python", "scripts/runpod_bootstrap.py"]`. Heavy Python dependencies are baked into the image from `requirements/pod-core.txt`, `requirements/pod-train.txt`, and `requirements/pod-vllm.txt`. The bootstrap stays stdlib-only, keeps a small runtime venv at `/workspace/nlsh-venv`, and writes `.pth` links there for `/opt/nlsh/src`, the image dependency venv at `/opt/nlsh-image-venv`, and any inherited base-image site-packages that the image venv exposes. It also records a bootstrap state version in `/workspace/.nlsh-bootstrap-version`; if that version changes in a future image, the bootstrap removes the old workspace venv once and recreates it before continuing. Normal pod startup should not need any runtime `pip install`.
+The container `CMD` is `["python", "scripts/runpod_bootstrap.py"]`. Heavy Python dependencies are baked into the image from `requirements/pod-core.txt`, `requirements/pod-train.txt`, and `requirements/pod-vllm.txt`, and `nlsh` itself is installed into the image Python during the build. The bootstrap stays stdlib-only, creates cache and artifact directories under `/workspace`, starts Runpod base services by default, and then execs `python -m nlsh.pod_workflow run`. Normal pod startup should not need any runtime `pip install`, and `/workspace` should only hold models, caches, checkpoints, and artifacts.
 
 The Typer workflow logs the resolved configuration and execution plan, then:
 
@@ -133,7 +136,7 @@ POD_EVAL_TIMEOUT=90
 POD_EVAL_STARTUP_TIMEOUT=900
 POD_EVAL_DOWNLOAD_WORKERS=3
 POD_EVAL_EVAL_ARGS="--oom-retries 3"
-RUNPOD_START_BASE_SERVICES=1
+RUNPOD_START_BASE_SERVICES=0
 POD_EVAL_RUN_BASELINE_EVAL=1
 POD_EVAL_RUN_TRAINING=1
 POD_EVAL_TRAIN_MODEL_ID=microsoft/Phi-4-mini-instruct
@@ -145,9 +148,9 @@ You can also run commands manually in the pod:
 
 ```bash
 export HF_HOME=/workspace/hf-cache
-/workspace/nlsh-venv/bin/python scripts/pod_eval.py download-models
-/workspace/nlsh-venv/bin/python scripts/pod_eval.py run-suite --dataset data/samples
-/workspace/nlsh-venv/bin/python -m nlsh.pod_workflow run --dry-run
+python scripts/pod_eval.py download-models
+python scripts/pod_eval.py run-suite --dataset data/samples
+python -m nlsh.pod_workflow run --dry-run
 ```
 
 The manifest is `configs/pod_eval_models.json`. It currently evaluates `microsoft/Phi-4-mini-instruct`, `HuggingFaceTB/SmolLM3-3B`, and `Qwen/Qwen3-8B` through vLLM with conservative single-GPU settings. Downloads run in parallel; eval stays sequential in the preferred order so one GPU is used predictably. If a vLLM startup or serve attempt fails with an OOM, `scripts/pod_eval.py` retries with smaller `max_num_seqs`, then shorter `max_model_len`, then lower `gpu_memory_utilization` until it hits the configured floor. If training hits an OOM, `scripts/phi_4_training.py` retries with smaller batch sizes, then shorter sequence length, resuming from the latest checkpoint when one exists.

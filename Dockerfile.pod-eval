@@ -7,14 +7,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CC=/usr/bin/gcc \
     CXX=/usr/bin/g++ \
     HF_HOME=/workspace/hf-cache \
-    POD_EVAL_IMAGE_VENV=/opt/nlsh-image-venv \
     TMPDIR=/workspace/tmp \
     TRANSFORMERS_CACHE=/workspace/hf-cache \
     TRITON_CACHE_DIR=/workspace/triton-cache \
     VLLM_CACHE_ROOT=/workspace/vllm-cache \
     XDG_CACHE_HOME=/workspace/.cache \
     NLSH_VLLM_LIKE=1 \
-    POD_EVAL_VENV=/workspace/nlsh-venv \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONUNBUFFERED=1
 
@@ -37,22 +35,22 @@ RUN mkdir -p /workspace/hf-cache /workspace/tmp /workspace/triton-cache /workspa
         libgomp1 \
         libnuma1 \
         openssh-client \
-        openssh-server \
         procps \
         python-is-python3 \
         python3-dev \
-        python3-venv \
         qpdf \
-    && rm -rf /var/lib/apt/lists/* \
-    && python -m venv --system-site-packages /opt/nlsh-image-venv
+    && rm -rf /var/lib/apt/lists/*
 
-RUN --mount=type=cache,target=/root/.cache/pip /opt/nlsh-image-venv/bin/python -m pip install --upgrade pip setuptools wheel
-RUN --mount=type=cache,target=/root/.cache/pip /opt/nlsh-image-venv/bin/python -m pip install -r requirements/pod-core.txt
-RUN --mount=type=cache,target=/root/.cache/pip /opt/nlsh-image-venv/bin/python -m pip install -r requirements/pod-train.txt
-RUN --mount=type=cache,target=/root/.cache/pip /opt/nlsh-image-venv/bin/python -m pip install -r requirements/pod-vllm.txt
+RUN --mount=type=cache,target=/root/.cache/pip python -m pip install --upgrade pip setuptools wheel
+RUN --mount=type=cache,target=/root/.cache/pip python -m pip install -r requirements/pod-core.txt
+RUN --mount=type=cache,target=/root/.cache/pip python -m pip install -r requirements/pod-train.txt
+RUN --mount=type=cache,target=/root/.cache/pip python -m pip install -r requirements/pod-vllm.txt
 
 COPY pyproject.toml README.md ./
 COPY src ./src
+
+RUN --mount=type=cache,target=/root/.cache/pip python -m pip install --no-deps .
+
 COPY data ./data
 COPY configs ./configs
 COPY scripts ./scripts
