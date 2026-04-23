@@ -1,0 +1,5 @@
+openai==2.32.0
+pydantic==2.13.3
+pypdf==6.10.2
+typer==0.24.2
+huggingface-hub==0.36.2

@@ -12,11 +12,12 @@ APP_DIR = Path(os.environ.get("POD_EVAL_APP_DIR", "/opt/nlsh"))
 WORKSPACE_DIR = Path(os.environ.get("POD_EVAL_WORKSPACE", "/workspace"))
 ARTIFACT_DIR = Path(os.environ.get("POD_EVAL_OUTPUT_DIR", WORKSPACE_DIR / "nlsh-artifacts"))
 VENV_DIR = Path(os.environ.get("POD_EVAL_VENV", WORKSPACE_DIR / "nlsh-venv"))
+IMAGE_VENV_DIR = Path(os.environ.get("POD_EVAL_IMAGE_VENV", "/opt/nlsh-image-venv"))
 BOOTSTRAP_PYTHON = os.environ.get("POD_EVAL_BOOTSTRAP_PYTHON", sys.executable)
-BOOTSTRAP_STATE_VERSION = "2"
+BOOTSTRAP_STATE_VERSION = "3"
 BOOTSTRAP_VERSION_FILE = WORKSPACE_DIR / ".nlsh-bootstrap-version"
-PROJECT_SPEC = ".[train]"
-BOOTSTRAP_PACKAGES = (PROJECT_SPEC, "vllm")
+SOURCE_PTH_FILENAME = "00-nlsh-src.pth"
+IMAGE_DEPS_PTH_FILENAME = "01-nlsh-image-deps.pth"
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -37,6 +38,19 @@ def _log(message: str = "") -> None:
 def _run(command: list[str], *, cwd: Path | None = None) -> None:
     _log("+ " + " ".join(command))
     subprocess.run(command, cwd=cwd, check=True)
+
+
+def _python_version_dir() -> str:
+    return f"python{sys.version_info.major}.{sys.version_info.minor}"
+
+
+def _site_packages_dir(venv_dir: Path) -> Path:
+    return venv_dir / "lib" / _python_version_dir() / "site-packages"
+
+
+def _write_text(path: Path, contents: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(contents, encoding="utf-8")
 
 
 def _ensure_workspace() -> None:
@@ -83,6 +97,23 @@ def _start_runpod_services() -> None:
     time.sleep(float(os.environ.get("POD_EVAL_RUNPOD_SERVICE_DELAY", "2")))
 
 
+def _sync_runtime_paths() -> None:
+    source_dir = APP_DIR / "src"
+    image_site_packages = _site_packages_dir(IMAGE_VENV_DIR)
+    workspace_site_packages = _site_packages_dir(VENV_DIR)
+
+    if not source_dir.exists():
+        raise RuntimeError(f"expected source tree at {source_dir}")
+    if not image_site_packages.exists():
+        raise RuntimeError(f"expected image site-packages at {image_site_packages}")
+
+    _write_text(workspace_site_packages / SOURCE_PTH_FILENAME, str(source_dir) + "\n")
+    _write_text(
+        workspace_site_packages / IMAGE_DEPS_PTH_FILENAME,
+        f"import site; site.addsitedir({str(image_site_packages)!r})\n",
+    )
+
+
 def _prepare_python() -> Path:
     python_bin = VENV_DIR / "bin/python"
     current_version = BOOTSTRAP_VERSION_FILE.read_text(encoding="utf-8").strip() if BOOTSTRAP_VERSION_FILE.exists() else None
@@ -99,8 +130,7 @@ def _prepare_python() -> Path:
     else:
         _log(f"using persistent Python environment at {python_bin}")
 
-    _run([str(python_bin), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
-    _run([str(python_bin), "-m", "pip", "install", "-e", *BOOTSTRAP_PACKAGES], cwd=APP_DIR)
+    _sync_runtime_paths()
     BOOTSTRAP_VERSION_FILE.write_text(BOOTSTRAP_STATE_VERSION + "\n", encoding="utf-8")
 
     return python_bin

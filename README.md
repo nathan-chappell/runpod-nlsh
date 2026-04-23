@@ -111,7 +111,7 @@ Create a Runpod pod with:
 - Recommended volume size: at least 100 GB
 - Container disk: use 20 GB for the Runpod PyTorch base image. The model, vLLM, tmp, and cache data still live on `/workspace`, but the base image itself is large enough that 10 GB is likely too tight if Runpod counts image/root filesystem unpacking there.
 
-The container `CMD` is `["python", "scripts/runpod_bootstrap.py"]`. The bootstrap stays stdlib-only so it can prepare the persistent Python environment before project dependencies are available. It keeps the runtime venv at `/workspace/nlsh-venv` so it survives pod restarts, attempts the required pip installs on every startup, and records a simple bootstrap state version in `/workspace/.nlsh-bootstrap-version`. If that version changes in a future image, the bootstrap removes the old venv once and recreates it before continuing. After dependency install it hands off to the Typer workflow at `python -m nlsh.pod_workflow run`.
+The container `CMD` is `["python", "scripts/runpod_bootstrap.py"]`. Heavy Python dependencies are baked into the image from `requirements/pod-core.txt`, `requirements/pod-train.txt`, and `requirements/pod-vllm.txt`. The bootstrap stays stdlib-only, keeps a small runtime venv at `/workspace/nlsh-venv`, and writes `.pth` links there for `/opt/nlsh/src` and the image dependency venv at `/opt/nlsh-image-venv`. It also records a bootstrap state version in `/workspace/.nlsh-bootstrap-version`; if that version changes in a future image, the bootstrap removes the old workspace venv once and recreates it before continuing. Normal pod startup should not need any runtime `pip install`.
 
 The Typer workflow logs the resolved configuration and execution plan, then:
 
@@ -171,7 +171,7 @@ Each row includes:
 - `messages`
 - `plan`
 
-For a direct single-GPU Phi-4-mini LoRA run on a 32 GB+ Runpod GPU, install the training extras in the pod and run the training script directly:
+For a direct single-GPU Phi-4-mini LoRA run outside the pod image on a 32 GB+ Runpod GPU, install the training extras and run the training script directly:
 
 ```bash
 pip install -e ".[dev,train]"

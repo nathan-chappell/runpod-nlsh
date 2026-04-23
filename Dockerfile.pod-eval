@@ -7,6 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CC=/usr/bin/gcc \
     CXX=/usr/bin/g++ \
     HF_HOME=/workspace/hf-cache \
+    POD_EVAL_IMAGE_VENV=/opt/nlsh-image-venv \
     TMPDIR=/workspace/tmp \
     TRANSFORMERS_CACHE=/workspace/hf-cache \
     TRITON_CACHE_DIR=/workspace/triton-cache \
@@ -14,16 +15,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
     XDG_CACHE_HOME=/workspace/.cache \
     NLSH_VLLM_LIKE=1 \
     POD_EVAL_VENV=/workspace/nlsh-venv \
-    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /opt/nlsh
 
-COPY pyproject.toml README.md ./
-COPY src ./src
-COPY data ./data
-COPY configs ./configs
-COPY scripts ./scripts
+COPY requirements ./requirements
 
 RUN mkdir -p /workspace/hf-cache /workspace/tmp /workspace/triton-cache /workspace/vllm-cache /workspace/.cache \
     && chmod 1777 /workspace/tmp \
@@ -47,7 +44,20 @@ RUN mkdir -p /workspace/hf-cache /workspace/tmp /workspace/triton-cache /workspa
         python3-venv \
         qpdf \
     && rm -rf /var/lib/apt/lists/* \
-    && chmod +x scripts/pod_eval.py scripts/runpod_bootstrap.py
+    && python -m venv /opt/nlsh-image-venv
+
+RUN --mount=type=cache,target=/root/.cache/pip /opt/nlsh-image-venv/bin/python -m pip install --upgrade pip setuptools wheel
+RUN --mount=type=cache,target=/root/.cache/pip /opt/nlsh-image-venv/bin/python -m pip install -r requirements/pod-core.txt
+RUN --mount=type=cache,target=/root/.cache/pip /opt/nlsh-image-venv/bin/python -m pip install -r requirements/pod-train.txt
+RUN --mount=type=cache,target=/root/.cache/pip /opt/nlsh-image-venv/bin/python -m pip install -r requirements/pod-vllm.txt
+
+COPY pyproject.toml README.md ./
+COPY src ./src
+COPY data ./data
+COPY configs ./configs
+COPY scripts ./scripts
+
+RUN chmod +x scripts/pod_eval.py scripts/runpod_bootstrap.py
 
 ENTRYPOINT []
 CMD ["python", "scripts/runpod_bootstrap.py"]

@@ -22,6 +22,24 @@ def load_pod_eval_module() -> ModuleType:
     return module
 
 
+def load_runpod_bootstrap_module() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("runpod_bootstrap", BOOTSTRAP_SCRIPT)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def read_requirements(path: str) -> list[str]:
+    return [
+        line.strip()
+        for line in Path(path).read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
 def test_pod_eval_help() -> None:
     result = subprocess.run(
         [sys.executable, "scripts/pod_eval.py", "--help"],
@@ -94,12 +112,21 @@ def test_pod_eval_dockerfile_uses_runpod_base() -> None:
     assert "CC=/usr/bin/gcc" in dockerfile
     assert "WORKDIR /opt/nlsh" in dockerfile
     assert "HF_HOME=/workspace/hf-cache" in dockerfile
+    assert "POD_EVAL_IMAGE_VENV=/opt/nlsh-image-venv" in dockerfile
     assert "TMPDIR=/workspace/tmp" in dockerfile
     assert "TRITON_CACHE_DIR=/workspace/triton-cache" in dockerfile
     assert "mkdir -p /workspace/hf-cache /workspace/tmp" in dockerfile
     assert "chmod 1777 /workspace/tmp" in dockerfile
     assert "POD_EVAL_VENV=/workspace/nlsh-venv" in dockerfile
-    assert "POD_EVAL_VLLM_SPEC" not in dockerfile
+    assert "COPY requirements ./requirements" in dockerfile
+    assert dockerfile.index("COPY requirements ./requirements") < dockerfile.index("COPY src ./src")
+    assert "PIP_DISABLE_PIP_VERSION_CHECK=1" in dockerfile
+    assert "PIP_NO_CACHE_DIR=1" not in dockerfile
+    assert "python -m venv /opt/nlsh-image-venv" in dockerfile
+    assert "--mount=type=cache,target=/root/.cache/pip" in dockerfile
+    assert "requirements/pod-core.txt" in dockerfile
+    assert "requirements/pod-train.txt" in dockerfile
+    assert "requirements/pod-vllm.txt" in dockerfile
     assert "python -m pip install --no-cache-dir -e ." not in dockerfile
     assert "python scripts/pod_eval.py download-models" not in dockerfile
     assert 'CMD ["python", "scripts/runpod_bootstrap.py"]' in dockerfile
@@ -111,18 +138,20 @@ def test_runpod_bootstrap_uses_volume_caches_and_base_services() -> None:
     assert '"TMPDIR": WORKSPACE_DIR / "tmp"' in script
     assert '"TRITON_CACHE_DIR": WORKSPACE_DIR / "triton-cache"' in script
     assert '"VLLM_CACHE_ROOT": WORKSPACE_DIR / "vllm-cache"' in script
-    assert 'BOOTSTRAP_STATE_VERSION = "2"' in script
+    assert 'IMAGE_VENV_DIR = Path(os.environ.get("POD_EVAL_IMAGE_VENV", "/opt/nlsh-image-venv"))' in script
+    assert 'BOOTSTRAP_STATE_VERSION = "3"' in script
     assert 'BOOTSTRAP_VERSION_FILE = WORKSPACE_DIR / ".nlsh-bootstrap-version"' in script
+    assert 'SOURCE_PTH_FILENAME = "00-nlsh-src.pth"' in script
+    assert 'IMAGE_DEPS_PTH_FILENAME = "01-nlsh-image-deps.pth"' in script
     assert 'os.environ.setdefault("CC", "/usr/bin/gcc")' in script
     assert '_env_bool("POD_EVAL_START_RUNPOD_SERVICES", True)' in script
     assert 'Path("/start.sh")' in script
     assert '"-m", "nlsh.pod_workflow", "run"' in script
-    assert 'PROJECT_SPEC = ".[train]"' in script
-    assert 'BOOTSTRAP_PACKAGES = (PROJECT_SPEC, "vllm")' in script
     assert 'shutil.rmtree(VENV_DIR)' in script
-    assert '"-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"' in script
-    assert '"-m", "pip", "install", "-e", *BOOTSTRAP_PACKAGES' in script
+    assert "_site_packages_dir(IMAGE_VENV_DIR)" in script
+    assert "site.addsitedir(" in script
     assert 'BOOTSTRAP_VERSION_FILE.write_text(BOOTSTRAP_STATE_VERSION + "\\n", encoding="utf-8")' in script
+    assert '"-m", "pip", "install"' not in script
     assert "_module_available" not in script
 
 
@@ -140,6 +169,7 @@ def test_pyproject_declares_training_extra() -> None:
     train_deps = pyproject["project"]["optional-dependencies"]["train"]
     dependencies = pyproject["project"]["dependencies"]
 
+    assert any(dep.startswith("huggingface-hub") for dep in dependencies)
     assert any(dep.startswith("typer") for dep in dependencies)
     assert any(dep.startswith("datasets") for dep in train_deps)
     assert any(dep.startswith("hf_transfer") for dep in train_deps)
@@ -148,12 +178,92 @@ def test_pyproject_declares_training_extra() -> None:
     assert any(dep.startswith("trl") for dep in train_deps)
 
 
+def test_pod_requirements_split_runtime_training_and_vllm() -> None:
+    assert read_requirements("requirements/pod-core.txt") == [
+        "openai==2.32.0",
+        "pydantic==2.13.3",
+        "pypdf==6.10.2",
+        "typer==0.24.2",
+        "huggingface-hub==0.36.2",
+    ]
+    assert read_requirements("requirements/pod-train.txt") == [
+        "accelerate==1.13.0",
+        "datasets==4.8.4",
+        "hf_transfer==0.1.9",
+        "peft==0.19.1",
+        "transformers==4.57.6",
+        "trl==1.2.0",
+    ]
+    assert read_requirements("requirements/pod-vllm.txt") == ["vllm==0.19.1"]
+
+
 def test_pod_workflow_does_not_install_training_dependencies_at_runtime() -> None:
     workflow = Path("src/nlsh/pod_workflow.py").read_text(encoding="utf-8")
 
     assert "training_modules_available" not in workflow
     assert '"training-deps.log"' not in workflow
     assert '"pip", "install", "-e"' not in workflow
+
+
+def test_runpod_bootstrap_writes_runtime_pth_files(tmp_path: Path, monkeypatch: Any) -> None:
+    module = load_runpod_bootstrap_module()
+    workspace_dir = tmp_path / "workspace"
+    artifact_dir = workspace_dir / "nlsh-artifacts"
+    app_dir = tmp_path / "app"
+    source_dir = app_dir / "src"
+    image_venv_dir = tmp_path / "image-venv"
+
+    source_dir.mkdir(parents=True)
+    module._site_packages_dir(image_venv_dir).mkdir(parents=True)
+
+    monkeypatch.setattr(module, "APP_DIR", app_dir)
+    monkeypatch.setattr(module, "WORKSPACE_DIR", workspace_dir)
+    monkeypatch.setattr(module, "ARTIFACT_DIR", artifact_dir)
+    monkeypatch.setattr(module, "VENV_DIR", workspace_dir / "nlsh-venv")
+    monkeypatch.setattr(module, "IMAGE_VENV_DIR", image_venv_dir)
+    monkeypatch.setattr(module, "BOOTSTRAP_VERSION_FILE", workspace_dir / ".nlsh-bootstrap-version")
+    monkeypatch.setattr(module, "BOOTSTRAP_PYTHON", sys.executable)
+
+    module._ensure_workspace()
+    python_bin = module._prepare_python()
+
+    workspace_site_packages = module._site_packages_dir(module.VENV_DIR)
+    assert python_bin.exists()
+    assert (workspace_site_packages / module.SOURCE_PTH_FILENAME).read_text(encoding="utf-8") == str(source_dir) + "\n"
+    image_pth = (workspace_site_packages / module.IMAGE_DEPS_PTH_FILENAME).read_text(encoding="utf-8")
+    assert "site.addsitedir(" in image_pth
+    assert str(module._site_packages_dir(image_venv_dir)) in image_pth
+    assert module.BOOTSTRAP_VERSION_FILE.read_text(encoding="utf-8").strip() == module.BOOTSTRAP_STATE_VERSION
+
+
+def test_runpod_bootstrap_resets_stale_workspace_venv(tmp_path: Path, monkeypatch: Any) -> None:
+    module = load_runpod_bootstrap_module()
+    workspace_dir = tmp_path / "workspace"
+    artifact_dir = workspace_dir / "nlsh-artifacts"
+    app_dir = tmp_path / "app"
+    source_dir = app_dir / "src"
+    image_venv_dir = tmp_path / "image-venv"
+    stale_marker = workspace_dir / "nlsh-venv" / "stale.txt"
+
+    source_dir.mkdir(parents=True)
+    module._site_packages_dir(image_venv_dir).mkdir(parents=True)
+    stale_marker.parent.mkdir(parents=True)
+    stale_marker.write_text("stale\n", encoding="utf-8")
+
+    monkeypatch.setattr(module, "APP_DIR", app_dir)
+    monkeypatch.setattr(module, "WORKSPACE_DIR", workspace_dir)
+    monkeypatch.setattr(module, "ARTIFACT_DIR", artifact_dir)
+    monkeypatch.setattr(module, "VENV_DIR", workspace_dir / "nlsh-venv")
+    monkeypatch.setattr(module, "IMAGE_VENV_DIR", image_venv_dir)
+    monkeypatch.setattr(module, "BOOTSTRAP_VERSION_FILE", workspace_dir / ".nlsh-bootstrap-version")
+    monkeypatch.setattr(module, "BOOTSTRAP_PYTHON", sys.executable)
+
+    module._ensure_workspace()
+    module.BOOTSTRAP_VERSION_FILE.write_text("old\n", encoding="utf-8")
+    python_bin = module._prepare_python()
+
+    assert python_bin.exists()
+    assert not stale_marker.exists()
 
 
 def test_runpod_startup_python_syntax() -> None:
