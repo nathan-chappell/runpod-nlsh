@@ -173,6 +173,8 @@ For local non-GPU checks, validate the manifest and exercise the eval path with 
 
 The canonical, coverage-organized examples live in `data/samples/`; see `data/index.md` for the current map. Materialized fair splits live under `data/splits/v1/`.
 
+The April 24, 2026 Runpod fine-tune findings and the follow-up dataset plan are captured in `docs/runpod-results-2026-04-24.md`.
+
 Each row includes:
 
 - `focus`
