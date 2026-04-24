@@ -89,7 +89,11 @@ def command_compile(args: argparse.Namespace) -> int:
 
 def command_eval(args: argparse.Namespace) -> int:
     dataset_path = args.dataset
-    planner = load_planner(args.planner, dataset_path=dataset_path if args.planner == "gold" else None)
+    planner = load_planner(
+        args.planner,
+        dataset_path=dataset_path if args.planner == "gold" else None,
+        strict=args.planner == "openai",
+    )
     results = evaluate_planner(
         planner,
         dataset_path=dataset_path,

@@ -151,7 +151,8 @@ def test_runpod_bootstrap_uses_volume_caches_and_base_services() -> None:
     assert 'Path("/start.sh")' in script
     assert '"-m", "nlsh.pod_workflow", "run"' in script
     assert "_workflow_command" in script
-    assert "os.execvpe(command[0], command, os.environ)" in script
+    assert "_workflow_environment" in script
+    assert "os.execvpe(command[0], command, env)" in script
     assert "POD_EVAL_VENV" not in script
     assert "POD_EVAL_IMAGE_VENV" not in script
     assert "BOOTSTRAP_VERSION_FILE" not in script
@@ -306,11 +307,12 @@ def test_runpod_bootstrap_main_execs_image_python(tmp_path: Path, monkeypatch: A
     monkeypatch.setattr(module, "_start_runpod_services", lambda: captured.setdefault("services", True))
     monkeypatch.setattr(module.sys, "executable", "/usr/bin/image-python")
     monkeypatch.setattr(module.os, "chdir", lambda path: captured.setdefault("chdir", path))
+    monkeypatch.delenv("POD_EVAL_EXIT_AFTER", raising=False)
 
     def fake_execvpe(executable: str, command: list[str], env: dict[str, str]) -> None:
         captured["executable"] = executable
         captured["command"] = command
-        captured["env"] = env
+        captured["env"] = dict(env)
         raise SystemExit(0)
 
     monkeypatch.setattr(module.os, "execvpe", fake_execvpe)
@@ -323,6 +325,39 @@ def test_runpod_bootstrap_main_execs_image_python(tmp_path: Path, monkeypatch: A
     assert captured["chdir"] == app_dir
     assert captured["executable"] == "/usr/bin/image-python"
     assert captured["command"] == ["/usr/bin/image-python", "-m", "nlsh.pod_workflow", "run"]
+    assert captured["env"]["POD_EVAL_EXIT_AFTER"] == "1"
+
+
+def test_runpod_bootstrap_preserves_explicit_exit_after(tmp_path: Path, monkeypatch: Any) -> None:
+    module = load_runpod_bootstrap_module()
+    app_dir = tmp_path / "app"
+    artifact_dir = tmp_path / "artifacts"
+    app_dir.mkdir(parents=True)
+    artifact_dir.mkdir(parents=True)
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(module, "APP_DIR", app_dir)
+    monkeypatch.setattr(module, "ARTIFACT_DIR", artifact_dir)
+    monkeypatch.setattr(module, "_ensure_workspace", lambda: None)
+    monkeypatch.setattr(module, "_start_runpod_services", lambda: None)
+    monkeypatch.setattr(module.sys, "executable", "/usr/bin/image-python")
+    monkeypatch.setattr(module.os, "chdir", lambda _path: None)
+    monkeypatch.setenv("POD_EVAL_EXIT_AFTER", "1")
+
+    def fake_execvpe(executable: str, command: list[str], env: dict[str, str]) -> None:
+        captured["executable"] = executable
+        captured["command"] = command
+        captured["env"] = dict(env)
+        raise SystemExit(0)
+
+    monkeypatch.setattr(module.os, "execvpe", fake_execvpe)
+
+    with pytest.raises(SystemExit):
+        module.main()
+
+    assert captured["executable"] == "/usr/bin/image-python"
+    assert captured["command"] == ["/usr/bin/image-python", "-m", "nlsh.pod_workflow", "run"]
+    assert captured["env"]["POD_EVAL_EXIT_AFTER"] == "1"
 
 
 def test_runpod_startup_python_syntax() -> None:

@@ -19,6 +19,11 @@ from nlsh.dataio import DEFAULT_EVAL_FRACTION, default_dataset_path, load_jsonl,
 
 DEFAULT_MODEL_ID = "microsoft/Phi-4-mini-instruct"
 DEFAULT_DATASET = Path("data/samples")
+DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE = 4
+DEFAULT_PER_DEVICE_EVAL_BATCH_SIZE = 4
+DEFAULT_GRADIENT_ACCUMULATION_STEPS = 4
+DEFAULT_LEARNING_RATE = 5.0e-4
+DEFAULT_NUM_TRAIN_EPOCHS = 10.0
 VALID_ATTN_IMPLEMENTATIONS = ("auto", "flash_attention_2", "sdpa", "eager")
 VALID_TORCH_DTYPES = ("bf16", "fp16", "fp32")
 OOM_TEXT_PATTERNS = (
@@ -677,12 +682,12 @@ def run(
     lora_alpha: int = typer.Option(16),
     lora_dropout: float = typer.Option(0.05),
     target_modules: str = typer.Option("qkv_proj"),
-    per_device_train_batch_size: int = typer.Option(1),
-    per_device_eval_batch_size: int = typer.Option(1),
-    gradient_accumulation_steps: int = typer.Option(8),
+    per_device_train_batch_size: int = typer.Option(DEFAULT_PER_DEVICE_TRAIN_BATCH_SIZE),
+    per_device_eval_batch_size: int = typer.Option(DEFAULT_PER_DEVICE_EVAL_BATCH_SIZE),
+    gradient_accumulation_steps: int = typer.Option(DEFAULT_GRADIENT_ACCUMULATION_STEPS),
     gradient_checkpointing: bool = typer.Option(True, "--gradient-checkpointing/--no-gradient-checkpointing"),
-    learning_rate: float = typer.Option(2.0e-4),
-    num_train_epochs: float = typer.Option(3.0),
+    learning_rate: float = typer.Option(DEFAULT_LEARNING_RATE),
+    num_train_epochs: float = typer.Option(DEFAULT_NUM_TRAIN_EPOCHS),
     max_steps: int = typer.Option(-1),
     warmup_ratio: float = typer.Option(0.03),
     lr_scheduler_type: str = typer.Option("cosine"),

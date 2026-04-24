@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any, Protocol
 
 from pydantic import ValidationError
 
@@ -18,21 +17,6 @@ from nlsh.schema import (
     validate_plan_payload,
     validation_error_text,
 )
-
-
-STEP_KINDS = {
-    "find_files",
-    "pdf_merge",
-    "pdf_extract_pages",
-    "pdf_search_text",
-    "csv_to_json",
-    "json_filter",
-    "json_select_fields",
-    "json_sort",
-    "json_group_count",
-}
-PLAN_LEVEL_KEYS = {"needs_confirmation", "questions", "risk_level", "notes", "version"}
-
 
 class Planner(Protocol):
     def plan(self, prompt: str) -> PlannerOutput: ...
@@ -146,119 +130,30 @@ def _extract_json_fragment(text: str) -> str:
     return stripped
 
 
-def _coerce_step_payload(step: Any) -> Any:
-    if not isinstance(step, dict):
-        return step
-
-    coerced = {key: value for key, value in step.items() if key not in PLAN_LEVEL_KEYS}
-    nested_kind = next(
-        (key for key, value in coerced.items() if key in STEP_KINDS and isinstance(value, dict)),
-        None,
-    )
-    if "kind" not in coerced and nested_kind is not None:
-        nested_payload = dict(coerced.pop(nested_kind))
-        coerced = {"kind": nested_kind, **nested_payload, **coerced}
-
-    kind = coerced.get("kind")
-    if isinstance(kind, str):
-        normalized_kind = kind
-        if normalized_kind not in STEP_KINDS and normalized_kind.endswith("Step"):
-            normalized_kind = re.sub(r"(?<!^)(?=[A-Z])", "_", normalized_kind[:-4]).lower()
-        if normalized_kind in STEP_KINDS:
-            coerced["kind"] = normalized_kind
-            kind = normalized_kind
-
-    if kind == "find_files":
-        roots = coerced.pop("roots", None)
-        if roots is not None and "root" not in coerced:
-            coerced["root"] = roots[0] if isinstance(roots, list) and roots else roots
-        path = coerced.pop("path", None)
-        if path is not None and "root" not in coerced:
-            coerced["root"] = path
-        depth = coerced.pop("depth", None)
-        if depth is not None and "max_depth" not in coerced:
-            coerced["max_depth"] = depth
-        pattern = coerced.pop("pattern", None)
-        name_pattern = coerced.pop("name_pattern", None)
-        extension = coerced.pop("extension", None)
-        path_contains = coerced.pop("path_contains", None)
-        file_type = coerced.pop("file_type", None)
-        if extension is None and file_type in {"csv", "pdf", "json"}:
-            extension = f".{file_type}"
-        if "glob" not in coerced:
-            if pattern is not None:
-                coerced["glob"] = pattern
-            elif name_pattern is not None:
-                coerced["glob"] = name_pattern
-            elif extension is not None:
-                normalized_ext = extension if str(extension).startswith(".") else f".{extension}"
-                if path_contains:
-                    coerced["glob"] = f"*{path_contains}*{normalized_ext}"
-                else:
-                    coerced["glob"] = f"*{normalized_ext}"
-            elif path_contains is not None:
-                coerced["glob"] = f"*{path_contains}*"
-    elif kind == "json_group_count" and isinstance(coerced.get("group_by"), str):
-        coerced["group_by"] = [coerced["group_by"]]
-    return coerced
-
-
-def _coerce_plan_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    coerced = {key: value for key, value in payload.items() if key not in PLAN_LEVEL_KEYS}
-    candidate_step = _coerce_step_payload(coerced)
-    if (
-        isinstance(candidate_step, dict)
-        and candidate_step.get("kind") in STEP_KINDS
-        and "steps" not in coerced
-        and "question" not in coerced
-        and "clarifying_question" not in coerced
-    ):
-        return {"kind": "plan", "steps": [candidate_step]}
-
-    if "kind" not in coerced:
-        if "clarifying_question" in coerced:
-            return {"kind": "clarification", "question": coerced["clarifying_question"]}
-        if "question" in coerced and "steps" not in coerced:
-            return {"kind": "clarification", "question": coerced["question"]}
-        coerced["kind"] = "plan"
-    steps = coerced.get("steps")
-
-    if isinstance(steps, list):
-        coerced["steps"] = [_coerce_step_payload(step) for step in steps]
-    for key in PLAN_LEVEL_KEYS:
-        coerced.pop(key, None)
-    return coerced
-
-
-def _validate_or_coerce_plan_payload(
+def _validate_planner_payload(
     payload: str | bytes | dict[str, Any],
+    *,
+    extract_json_fragment: bool,
 ) -> PlannerOutput:
     if isinstance(payload, dict):
-        try:
-            return validate_plan_payload(payload)
-        except ValidationError:
-            return validate_plan_payload(_coerce_plan_payload(payload))
+        return validate_plan_payload(payload)
 
     try:
         return validate_plan_payload(payload)
     except ValidationError as original_error:
-        if TYPE_CHECKING:
-            assert isinstance(payload, (str, bytes))
+        if not extract_json_fragment:
+            raise
         text = payload.decode() if isinstance(payload, bytes) else payload
         extracted = _extract_json_fragment(text)
-        try:
-            parsed = json.loads(extracted)
-        except json.JSONDecodeError:
+        if extracted == text:
             raise original_error
-        try:
-            return validate_plan_payload(parsed)
-        except ValidationError:
-            return validate_plan_payload(_coerce_plan_payload(parsed))
+        return validate_plan_payload(extracted)
 
 
 class OpenAIPlanner:
-    def __init__(self, config: PlannerConfig | None = None) -> None:
+    def __init__(self, config: PlannerConfig | None = None, *, strict: bool = False) -> None:
         self.config = config or PlannerConfig.from_env()
+        self.strict = strict
         if not self.config.api_key:
             raise ValueError("Set NLSH_API_KEY or HF_TOKEN before using the OpenAI planner.")
 
@@ -328,8 +223,10 @@ class OpenAIPlanner:
         )
         raw_text = _extract_message_text(response.choices[0].message).strip()
         try:
-            return _validate_or_coerce_plan_payload(raw_text)
+            return _validate_planner_payload(raw_text, extract_json_fragment=not self.strict)
         except ValidationError as error:
+            if self.strict:
+                raise
             repaired_text = self._repair_payload(
                 client=client,
                 prompt=prompt,
@@ -338,7 +235,7 @@ class OpenAIPlanner:
             )
             if not repaired_text:
                 raise ValueError("Planner returned empty content while attempting to repair invalid JSON.")
-            return _validate_or_coerce_plan_payload(repaired_text)
+            return _validate_planner_payload(repaired_text, extract_json_fragment=True)
 
 
 class GoldPlanner:
@@ -354,9 +251,9 @@ class GoldPlanner:
         return self.prompt_to_plan[key]
 
 
-def load_planner(name: str, dataset_path: Path | None = None) -> Planner:
+def load_planner(name: str, dataset_path: Path | None = None, *, strict: bool = False) -> Planner:
     if name == "openai":
-        return OpenAIPlanner()
+        return OpenAIPlanner(strict=strict)
     if name == "gold":
         return GoldPlanner(dataset_path=dataset_path)
     raise ValueError(f"Unsupported planner: {name}")

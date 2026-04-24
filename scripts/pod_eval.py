@@ -456,7 +456,7 @@ def _make_planner(
         api_key=api_key,
         request_timeout=request_timeout,
     )
-    return OpenAIPlanner(config)
+    return OpenAIPlanner(config, strict=True)
 
 
 def evaluate_model(

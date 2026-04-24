@@ -54,6 +54,11 @@ def test_phi4_training_dry_run() -> None:
     assert payload["peft_config"]["r"] == 8
     assert payload["peft_config"]["lora_alpha"] == 16
     assert payload["peft_config"]["target_modules"] == ["qkv_proj"]
+    assert payload["training"]["per_device_train_batch_size"] == 4
+    assert payload["training"]["per_device_eval_batch_size"] == 4
+    assert payload["training"]["gradient_accumulation_steps"] == 4
+    assert payload["training"]["learning_rate"] == 5.0e-4
+    assert payload["training"]["num_train_epochs"] == 10.0
 
 
 def test_phi4_training_auto_partitions_default_dataset() -> None:

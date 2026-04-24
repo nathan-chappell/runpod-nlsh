@@ -4,7 +4,7 @@ This is the browseable map for agents adding examples to the NLSH planner datase
 
 The canonical dataset lives under `data/samples/`, organized by planner behavior:
 
-- `data/samples/`: 64 canonical examples.
+- `data/samples/`: 128 canonical examples.
 - `data/splits/v1/`: materialized `train/eval/test` splits for fairer fine-tuning and held-out pod eval.
 
 All migrated rows include `focus` as the first JSON key.
@@ -13,29 +13,29 @@ All migrated rows include `focus` as the first JSON key.
 
 Plans:
 
-- `data/samples/plans/find_files.jsonl`: 5 examples.
-- `data/samples/plans/pdf_merge.jsonl`: 5 examples.
-- `data/samples/plans/pdf_extract_pages.jsonl`: 5 examples.
-- `data/samples/plans/pdf_search_text.jsonl`: 5 examples.
-- `data/samples/plans/csv_to_json.jsonl`: 5 examples.
-- `data/samples/plans/json_filter.jsonl`: 5 examples.
-- `data/samples/plans/json_select_fields.jsonl`: 5 examples.
-- `data/samples/plans/json_sort.jsonl`: 5 examples.
-- `data/samples/plans/json_group_count.jsonl`: 5 examples.
-- `data/samples/plans/pipelines.jsonl`: 9 multi-step examples.
+- `data/samples/plans/find_files.jsonl`: 10 examples.
+- `data/samples/plans/pdf_merge.jsonl`: 10 examples.
+- `data/samples/plans/pdf_extract_pages.jsonl`: 10 examples.
+- `data/samples/plans/pdf_search_text.jsonl`: 10 examples.
+- `data/samples/plans/csv_to_json.jsonl`: 10 examples.
+- `data/samples/plans/json_filter.jsonl`: 10 examples.
+- `data/samples/plans/json_select_fields.jsonl`: 10 examples.
+- `data/samples/plans/json_sort.jsonl`: 10 examples.
+- `data/samples/plans/json_group_count.jsonl`: 10 examples.
+- `data/samples/plans/pipelines.jsonl`: 18 multi-step examples.
 
 Clarifications:
 
-- `data/samples/clarifications/pdf_extract_pages.jsonl`: 5 examples.
-- `data/samples/clarifications/pdf_merge.jsonl`: 5 examples.
+- `data/samples/clarifications/pdf_extract_pages.jsonl`: 10 examples.
+- `data/samples/clarifications/pdf_merge.jsonl`: 10 examples.
 
 ## Materialized Splits
 
 The Runpod workflow now defaults to the committed split tree under `data/splits/v1/`:
 
-- `data/splits/v1/train/`: 40 examples
-- `data/splits/v1/eval/`: 12 examples
-- `data/splits/v1/test/`: 12 examples
+- `data/splits/v1/train/`: 78 examples
+- `data/splits/v1/eval/`: 25 examples
+- `data/splits/v1/test/`: 25 examples
 
 These splits are generated deterministically per source file so every canonical JSONL file contributes held-out coverage. Regenerate them after changing `data/samples/`:
 
@@ -47,15 +47,15 @@ These splits are generated deterministically per source file so every canonical 
 
 Current plan-step coverage across all canonical plan samples:
 
-- `find_files`: 11
-- `pdf_merge`: 7
-- `pdf_extract_pages`: 5
-- `pdf_search_text`: 7
-- `csv_to_json`: 9
-- `json_filter`: 7
-- `json_select_fields`: 6
-- `json_sort`: 6
-- `json_group_count`: 6
+- `find_files`: 21
+- `pdf_merge`: 13
+- `pdf_extract_pages`: 10
+- `pdf_search_text`: 13
+- `csv_to_json`: 17
+- `json_filter`: 14
+- `json_select_fields`: 13
+- `json_sort`: 12
+- `json_group_count`: 13
 
 ## Row Convention
 

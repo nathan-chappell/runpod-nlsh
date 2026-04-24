@@ -44,6 +44,14 @@ def _ensure_workspace() -> None:
     os.environ.setdefault("CXX", "/usr/bin/g++")
 
 
+def _workflow_environment() -> dict[str, str]:
+    # Default to exiting after the baseline eval -> training -> post-training eval
+    # sequence so serious runs finish once and hand control back to the platform.
+    env = dict(os.environ)
+    env.setdefault("POD_EVAL_EXIT_AFTER", "1")
+    return env
+
+
 def _start_runpod_services() -> None:
     should_start = _env_bool(
         "RUNPOD_START_BASE_SERVICES",
@@ -83,10 +91,11 @@ def main() -> int:
     _log(f"artifact_dir={ARTIFACT_DIR}")
     _start_runpod_services()
     command = _workflow_command(dry_run=_env_bool("POD_EVAL_DRY_RUN", False))
+    env = _workflow_environment()
     _log("handoff to Typer workflow")
     _log("+ " + " ".join(command))
     os.chdir(APP_DIR)
-    os.execvpe(command[0], command, os.environ)
+    os.execvpe(command[0], command, env)
     return 0
 
 

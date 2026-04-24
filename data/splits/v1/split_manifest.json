@@ -4,94 +4,94 @@
   "eval_fraction": 0.2,
   "test_fraction": 0.2,
   "splits": {
-    "train": 40,
-    "eval": 12,
-    "test": 12
+    "train": 78,
+    "eval": 25,
+    "test": 25
   },
   "files": [
     {
       "path": "clarifications/pdf_extract_pages.jsonl",
-      "source_records": 5,
-      "train_records": 3,
-      "eval_records": 1,
-      "test_records": 1
+      "source_records": 10,
+      "train_records": 6,
+      "eval_records": 2,
+      "test_records": 2
     },
     {
       "path": "clarifications/pdf_merge.jsonl",
-      "source_records": 5,
-      "train_records": 3,
-      "eval_records": 1,
-      "test_records": 1
+      "source_records": 10,
+      "train_records": 6,
+      "eval_records": 2,
+      "test_records": 2
     },
     {
       "path": "plans/csv_to_json.jsonl",
-      "source_records": 5,
-      "train_records": 3,
-      "eval_records": 1,
-      "test_records": 1
+      "source_records": 10,
+      "train_records": 6,
+      "eval_records": 2,
+      "test_records": 2
     },
     {
       "path": "plans/find_files.jsonl",
-      "source_records": 5,
-      "train_records": 3,
-      "eval_records": 1,
-      "test_records": 1
+      "source_records": 10,
+      "train_records": 6,
+      "eval_records": 2,
+      "test_records": 2
     },
     {
       "path": "plans/json_filter.jsonl",
-      "source_records": 5,
-      "train_records": 3,
-      "eval_records": 1,
-      "test_records": 1
+      "source_records": 10,
+      "train_records": 6,
+      "eval_records": 2,
+      "test_records": 2
     },
     {
       "path": "plans/json_group_count.jsonl",
-      "source_records": 5,
-      "train_records": 3,
-      "eval_records": 1,
-      "test_records": 1
+      "source_records": 10,
+      "train_records": 6,
+      "eval_records": 2,
+      "test_records": 2
     },
     {
       "path": "plans/json_select_fields.jsonl",
-      "source_records": 5,
-      "train_records": 3,
-      "eval_records": 1,
-      "test_records": 1
+      "source_records": 10,
+      "train_records": 6,
+      "eval_records": 2,
+      "test_records": 2
     },
     {
       "path": "plans/json_sort.jsonl",
-      "source_records": 5,
-      "train_records": 3,
-      "eval_records": 1,
-      "test_records": 1
+      "source_records": 10,
+      "train_records": 6,
+      "eval_records": 2,
+      "test_records": 2
     },
     {
       "path": "plans/pdf_extract_pages.jsonl",
-      "source_records": 5,
-      "train_records": 3,
-      "eval_records": 1,
-      "test_records": 1
+      "source_records": 10,
+      "train_records": 6,
+      "eval_records": 2,
+      "test_records": 2
     },
     {
       "path": "plans/pdf_merge.jsonl",
-      "source_records": 5,
-      "train_records": 3,
-      "eval_records": 1,
-      "test_records": 1
+      "source_records": 10,
+      "train_records": 6,
+      "eval_records": 2,
+      "test_records": 2
     },
     {
       "path": "plans/pdf_search_text.jsonl",
-      "source_records": 5,
-      "train_records": 3,
-      "eval_records": 1,
-      "test_records": 1
+      "source_records": 10,
+      "train_records": 6,
+      "eval_records": 2,
+      "test_records": 2
     },
     {
       "path": "plans/pipelines.jsonl",
-      "source_records": 9,
-      "train_records": 7,
-      "eval_records": 1,
-      "test_records": 1
+      "source_records": 18,
+      "train_records": 12,
+      "eval_records": 3,
+      "test_records": 3
     }
   ]
 }

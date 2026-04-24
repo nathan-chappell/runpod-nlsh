@@ -24,12 +24,38 @@ def test_plan_rejects_unknown_key() -> None:
         raise AssertionError("PlanV1 accepted an unexpected key")
 
 
-def test_plan_requires_find_as_first_step_for_two_step_plan() -> None:
+def test_plan_allows_find_then_json_sort_pipeline() -> None:
+    plan = PlanV1.model_validate(
+        {
+            "kind": "plan",
+            "steps": [
+                {"kind": "find_files", "root": "./exports", "glob": "*revenue*.json"},
+                {
+                    "kind": "json_sort",
+                    "field": "due_date",
+                    "descending": True,
+                    "output_file": "revenue_sorted.json",
+                },
+            ],
+        }
+    )
+
+    assert len(plan.steps) == 2
+
+
+def test_plan_rejects_three_step_csv_json_pipeline() -> None:
     payload = {
         "kind": "plan",
         "steps": [
-            {"kind": "pdf_merge", "input_files": ["a.pdf"], "output_file": "merged.pdf"},
-            {"kind": "find_files", "root": ".", "glob": "*.pdf"},
+            {"kind": "find_files", "root": "./exports", "glob": "*june*.csv"},
+            {"kind": "csv_to_json"},
+            {
+                "kind": "json_filter",
+                "field": "region",
+                "operator": "eq",
+                "value": "eu",
+                "output_file": "june_eu.json",
+            },
         ],
     }
 
@@ -38,29 +64,42 @@ def test_plan_requires_find_as_first_step_for_two_step_plan() -> None:
     except ValidationError:
         pass
     else:
-        raise AssertionError("PlanV1 accepted an invalid step ordering")
+        raise AssertionError("PlanV1 accepted an unsupported 3-step pipeline")
 
 
-def test_plan_allows_three_step_csv_json_pipeline() -> None:
-    plan = PlanV1.model_validate(
-        {
-            "kind": "plan",
-            "steps": [
-                {"kind": "find_files", "root": "./exports", "glob": "*.csv"},
-                {"kind": "csv_to_json", "input_file": None, "output_file": None},
-                {
-                    "kind": "json_filter",
-                    "input_file": None,
-                    "field": "region",
-                    "operator": "eq",
-                    "value": "eu",
-                    "output_file": "eu.json",
-                },
-            ],
-        }
-    )
+def test_plan_rejects_null_handoff_fields_in_find_pipeline() -> None:
+    payload = {
+        "kind": "plan",
+        "steps": [
+            {"kind": "find_files", "root": "./contracts", "glob": "*.pdf"},
+            {
+                "kind": "pdf_merge",
+                "input_files": None,
+                "output_file": "bundle.pdf",
+            },
+        ],
+    }
 
-    assert len(plan.steps) == 3
+    try:
+        PlanV1.model_validate(payload)
+    except ValidationError:
+        pass
+    else:
+        raise AssertionError("PlanV1 accepted an explicit null pipeline handoff")
+
+
+def test_plan_rejects_single_step_csv_to_json_without_input_file() -> None:
+    payload = {
+        "kind": "plan",
+        "steps": [{"kind": "csv_to_json", "output_file": "orders.json"}],
+    }
+
+    try:
+        PlanV1.model_validate(payload)
+    except ValidationError:
+        pass
+    else:
+        raise AssertionError("PlanV1 accepted csv_to_json without input_file")
 
 
 def test_pdf_page_numbers_must_be_positive() -> None:

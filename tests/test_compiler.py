@@ -1,4 +1,7 @@
-from nlsh.compiler import compile_plan, required_tools_for_plan
+import pytest
+from pydantic import ValidationError
+
+from nlsh.compiler import CompileError, compile_plan, required_tools_for_plan
 from nlsh.schema import PlanV1
 
 
@@ -20,6 +23,49 @@ def test_compile_find_then_pdf_merge() -> None:
     assert "-- bundle.pdf" in compiled.script
     assert '"${MATCHES[@]}"' in compiled.script
     assert required_tools_for_plan(plan) == ["find", "qpdf"]
+
+
+def test_compile_find_then_json_sort() -> None:
+    plan = PlanV1.model_validate(
+        {
+            "kind": "plan",
+            "steps": [
+                {"kind": "find_files", "root": "./exports", "glob": "*revenue*.json"},
+                {
+                    "kind": "json_sort",
+                    "field": "due_date",
+                    "descending": True,
+                    "output_file": "revenue_sorted.json",
+                },
+            ],
+        }
+    )
+
+    compiled = compile_plan(plan)
+    assert 'Expected exactly one match for json input' in compiled.script
+    assert "jq --arg field due_date" in compiled.script
+    assert "sort_by(.[$field]) | reverse" in compiled.script
+    assert "> revenue_sorted.json" in compiled.script
+    assert required_tools_for_plan(plan) == ["find", "jq"]
+
+
+def test_compile_find_then_csv_to_json_requires_single_match() -> None:
+    plan = PlanV1.model_validate(
+        {
+            "kind": "plan",
+            "steps": [
+                {"kind": "find_files", "root": "./exports", "glob": "*june*.csv"},
+                {"kind": "csv_to_json", "output_file": "june.json"},
+            ],
+        }
+    )
+
+    compiled = compile_plan(plan, python_executable="/usr/bin/python3")
+    assert "Expected exactly one match for csv input" in compiled.script
+    assert '"${MATCHES[0]}"' in compiled.script
+    assert "/usr/bin/python3 -m nlsh.csv_to_json" in compiled.script
+    assert "> june.json" in compiled.script
+    assert required_tools_for_plan(plan) == ["find"]
 
 
 def test_compile_pdf_extract_uses_qpdf() -> None:
@@ -70,10 +116,9 @@ def test_compile_csv_to_json_then_filter_uses_jq() -> None:
         {
             "kind": "plan",
             "steps": [
-                {"kind": "csv_to_json", "input_file": "orders.csv", "output_file": None},
+                {"kind": "csv_to_json", "input_file": "orders.csv"},
                 {
                     "kind": "json_filter",
-                    "input_file": None,
                     "field": "status",
                     "operator": "eq",
                     "value": "paid",
@@ -90,33 +135,6 @@ def test_compile_csv_to_json_then_filter_uses_jq() -> None:
     assert "map(select(.[$field] == $value))" in compiled.script
     assert "> paid_orders.json" in compiled.script
     assert required_tools_for_plan(plan) == ["jq"]
-
-
-def test_compile_find_then_csv_json_pipeline_requires_single_match() -> None:
-    plan = PlanV1.model_validate(
-        {
-            "kind": "plan",
-            "steps": [
-                {"kind": "find_files", "root": "./exports", "glob": "*june*.csv"},
-                {"kind": "csv_to_json", "input_file": None, "output_file": None},
-                {
-                    "kind": "json_filter",
-                    "input_file": None,
-                    "field": "region",
-                    "operator": "eq",
-                    "value": "eu",
-                    "output_file": "june_eu.json",
-                },
-            ],
-        }
-    )
-
-    compiled = compile_plan(plan, python_executable="/usr/bin/python3")
-    assert "Expected exactly one match for csv input" in compiled.script
-    assert '"${MATCHES[0]}"' in compiled.script
-    assert "> $NLSH_TMP_JSON" in compiled.script
-    assert "> june_eu.json" in compiled.script
-    assert required_tools_for_plan(plan) == ["find", "jq"]
 
 
 def test_compile_numeric_json_filter_casts_string_values() -> None:
@@ -160,3 +178,47 @@ def test_compile_json_group_count_uses_jq() -> None:
     assert "group_by([.[$fields[]]])" in compiled.script
     assert "> counts.json" in compiled.script
     assert required_tools_for_plan(plan) == ["jq"]
+
+
+def test_removed_three_step_pipeline_fails_validation() -> None:
+    payload = {
+        "kind": "plan",
+        "steps": [
+            {"kind": "find_files", "root": "./exports", "glob": "*june*.csv"},
+            {"kind": "csv_to_json"},
+            {
+                "kind": "json_filter",
+                "field": "region",
+                "operator": "eq",
+                "value": "eu",
+                "output_file": "june_eu.json",
+            },
+        ],
+    }
+
+    with pytest.raises(ValidationError):
+        PlanV1.model_validate(payload)
+
+
+def test_compile_invalid_single_step_json_plan_raises() -> None:
+    plan = PlanV1.model_validate(
+        {
+            "kind": "plan",
+            "steps": [
+                {
+                    "kind": "json_filter",
+                    "input_file": "orders.json",
+                    "field": "status",
+                    "operator": "eq",
+                    "value": "paid",
+                    "output_file": "paid_orders.json",
+                }
+            ],
+        }
+    )
+
+    broken = plan.model_copy(deep=True)
+    broken.steps[0].input_file = None
+
+    with pytest.raises(CompileError):
+        compile_plan(broken)
