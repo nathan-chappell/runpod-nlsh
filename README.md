@@ -91,6 +91,17 @@ Evaluate against the seed dataset:
 ./.venv/bin/nlsh eval --planner gold
 ```
 
+Compare a live OpenAI-compatible endpoint against random canonical dataset samples:
+
+```bash
+export NLSH_BASE_URL=https://your-endpoint.example/v1
+export NLSH_MODEL=nlsh-phi4-ft
+export NLSH_API_KEY=...
+./.venv/bin/nlsh probe-live --count 5 --seed 20260424
+```
+
+`probe-live` now defaults to the same planner-style prompt shape that `nlsh plan/run` uses. If you want to replay the raw dataset `messages[:-1]` instead, add `--mode replay-messages`.
+
 ## Pod Eval And Fine-Tuning
 
 The pod eval and fine-tuning flow builds on Runpod's PyTorch base image and installs the project plus the full Python dependency stack during `docker build`. Pod startup stays lightweight: it prepares `/workspace`, starts Runpod base services through `/start.sh` when available, and then hands off to the workflow. Mutable state such as Hugging Face cache, downloaded models, checkpoints, and eval artifacts lives on `/workspace`; Python packages do not.
@@ -137,6 +148,7 @@ Optional runtime knobs:
 RUNPOD_BOOT_MODE=serve
 RUNPOD_SERVE_HOST=0.0.0.0
 RUNPOD_SERVE_PORT=8000
+RUNPOD_SERVE_API_KEY=replace-with-a-random-64-char-hex-token
 POD_EVAL_LIMIT=2
 POD_EVAL_TIMEOUT=90
 POD_EVAL_STARTUP_TIMEOUT=900
@@ -161,7 +173,9 @@ python scripts/stage_serving_adapter.py \
 
 The staging script copies the current LoRA adapter into `deploy/bundled-adapter/current/` and writes `bundled_adapter_manifest.json` for the serving bootstrap. The copied weight files stay git-ignored, but Docker will include them in the build context.
 
-Serve mode uses that bundled adapter and exposes the request model as `microsoft/Phi-4-mini-instruct:nlsh-phi4-ft`. You can also run commands manually in the pod:
+Serve mode uses that bundled adapter and exposes the request model as `microsoft/Phi-4-mini-instruct:nlsh-phi4-ft`. The public Runpod endpoint is the SGLang OpenAI-compatible API plus native SGLang health/info routes. Set `RUNPOD_SERVE_API_KEY` in the pod environment to require `Authorization: Bearer ...` on client requests. When Runpod provides `RUNPOD_POD_ID`, the bootstrap logs the proxy URL as `https://<pod-id>-8000.proxy.runpod.net` and the OpenAI base as `.../v1`.
+
+You can also run commands manually in the pod:
 
 ```bash
 export HF_HOME=/workspace/hf-cache
@@ -169,6 +183,13 @@ python scripts/pod_eval.py download-models
 python scripts/pod_eval.py run-suite --dataset data/splits/v1/test
 python scripts/pod_eval.py serve-lora --dry-run
 python -m nlsh.pod_workflow run --dry-run
+```
+
+To reach the service from outside Runpod, add `8000` to `Expose HTTP Ports`. Global networking alone is only for pod-to-pod traffic, not public access. A simple smoke test looks like:
+
+```bash
+curl -H "Authorization: Bearer $RUNPOD_SERVE_API_KEY" \
+  https://<pod-id>-8000.proxy.runpod.net/v1/models
 ```
 
 The manifest is `configs/pod_eval_models.json`. It currently evaluates `microsoft/Phi-4-mini-instruct`, `HuggingFaceTB/SmolLM3-3B`, and `Qwen/Qwen3-8B` through SGLang with conservative single-GPU settings. The default `sglang_args` disable CUDA graph capture and force Triton attention plus PyTorch sampling, which is a safer starting point on Runpod Blackwell/RTX 5090 pods using the CUDA 12.8 base image. Downloads run in parallel; eval stays sequential in the preferred order so one GPU is used predictably. The workflow now defaults `POD_EVAL_SELECTED_MODELS` to Phi-4 only, which keeps serious training runs focused on the main model unless you explicitly broaden the batch. If an SGLang startup or serve attempt fails with an OOM, `scripts/pod_eval.py` retries with smaller `max_running_requests`, then shorter `context_length`, then lower `mem_fraction_static` until it hits the configured floor. If training hits an OOM, `scripts/phi_4_training.py` retries with smaller batch sizes, then shorter sequence length, resuming from the latest checkpoint when one exists.

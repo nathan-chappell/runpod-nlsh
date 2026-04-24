@@ -1,0 +1,4 @@
+interface:
+  display_name: "Runpod Live Test"
+  short_description: "Smoke-test protected Runpod pod APIs"
+  default_prompt: "Use $runpod-live-test to locate the Runpod proxy URL and smoke-test the deployed API."

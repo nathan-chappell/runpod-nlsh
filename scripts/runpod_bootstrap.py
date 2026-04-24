@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import os
-import shlex
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+from nlsh.settings import RunpodServeSettings
 
 APP_DIR = Path(os.environ.get("POD_EVAL_APP_DIR", "/opt/nlsh"))
 WORKSPACE_DIR = Path(os.environ.get("POD_EVAL_WORKSPACE", "/workspace"))
@@ -26,6 +27,22 @@ def _log(message: str = "") -> None:
     print(line, flush=True)
     with (ARTIFACT_DIR / "startup.log").open("a", encoding="utf-8") as handle:
         handle.write(line + "\n")
+
+
+def _redact_command(command: list[str]) -> list[str]:
+    redacted: list[str] = []
+    scrub_next = False
+    for item in command:
+        if scrub_next:
+            redacted.append("<redacted>")
+            scrub_next = False
+            continue
+        if item in {"--api-key", "--admin-api-key"}:
+            redacted.append(item)
+            scrub_next = True
+            continue
+        redacted.append(item)
+    return redacted
 
 
 def _ensure_workspace() -> None:
@@ -89,6 +106,7 @@ def _workflow_command(*, dry_run: bool) -> list[str]:
 
 
 def _serve_command() -> list[str]:
+    settings = RunpodServeSettings.from_env()
     bundled_adapter_dir = APP_DIR / "bundled-adapter" / "current"
     command = [
         sys.executable,
@@ -99,17 +117,15 @@ def _serve_command() -> list[str]:
         "--adapter-dir",
         str(bundled_adapter_dir),
         "--host",
-        os.environ.get("RUNPOD_SERVE_HOST", "0.0.0.0"),
+        settings.host,
         "--port",
-        os.environ.get("RUNPOD_SERVE_PORT", "8000"),
+        str(settings.port),
     ]
-    model_id = os.environ.get("RUNPOD_SERVE_MODEL_ID")
-    adapter_name = os.environ.get("RUNPOD_SERVE_ADAPTER_NAME")
-    if model_id:
-        command.extend(["--model", model_id])
-    if adapter_name:
-        command.extend(["--adapter-name", adapter_name])
-    for arg in shlex.split(os.environ.get("RUNPOD_SERVE_SGLANG_ARGS", "")):
+    if settings.model_id:
+        command.extend(["--model", settings.model_id])
+    if settings.adapter_name:
+        command.extend(["--adapter-name", settings.adapter_name])
+    for arg in settings.sglang_args:
         command.append(f"--sglang-arg={arg}")
     return command
 
@@ -126,13 +142,20 @@ def main() -> int:
         command = _workflow_command(dry_run=_env_bool("POD_EVAL_DRY_RUN", False))
         env = _workflow_environment()
     elif mode == "serve":
+        serve_settings = RunpodServeSettings.from_env()
         command = _serve_command()
         env = dict(os.environ)
     else:
         raise SystemExit(f"Unsupported RUNPOD_BOOT_MODE={mode!r}; expected 'serve' or 'workflow'")
     _log(f"boot_mode={mode}")
+    if mode == "serve":
+        if serve_settings.proxy_url:
+            _log(f"proxy_url={serve_settings.proxy_url}")
+            _log(f"openai_base_url={serve_settings.proxy_url}/v1")
+        if serve_settings.api_key:
+            _log("serve_auth=bearer token required via RUNPOD_SERVE_API_KEY")
     _log("handoff to runtime command")
-    _log("+ " + " ".join(command))
+    _log("+ " + " ".join(_redact_command(command)))
     os.chdir(APP_DIR)
     os.execvpe(command[0], command, env)
     return 0

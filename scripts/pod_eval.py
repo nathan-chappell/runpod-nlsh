@@ -20,6 +20,7 @@ from pydantic import ValidationError
 from nlsh.compiler import CompileError, compile_plan
 from nlsh.dataio import load_jsonl
 from nlsh.planner import GoldPlanner, OpenAIPlanner, Planner, PlannerConfig
+from nlsh.settings import RunpodServeSettings
 from nlsh.schema import PlanV1, normalize_plan, validate_plan_payload
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -140,6 +141,22 @@ def _tail_text(path: Path, line_count: int = 220) -> str:
         return ""
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     return "\n".join(lines[-line_count:])
+
+
+def _redact_command(command: list[str]) -> list[str]:
+    redacted: list[str] = []
+    scrub_next = False
+    for item in command:
+        if scrub_next:
+            redacted.append("<redacted>")
+            scrub_next = False
+            continue
+        if item in {"--api-key", "--admin-api-key"}:
+            redacted.append(item)
+            scrub_next = True
+            continue
+        redacted.append(item)
+    return redacted
 
 
 def _default_bundled_adapter_dir() -> Path:
@@ -267,6 +284,7 @@ def _sglang_command(
     host: str,
     port: int,
     extra_args: list[str],
+    api_key: str | None = None,
 ) -> list[str]:
     command = [
         sys.executable,
@@ -289,6 +307,8 @@ def _sglang_command(
         "--file-storage-path",
         os.environ.get("SGLANG_STORAGE_PATH", "/workspace/sglang-storage"),
     ]
+    if api_key:
+        command.extend(["--api-key", api_key])
     if spec.trust_remote_code:
         command.append("--trust-remote-code")
     command.extend(spec.sglang_args)
@@ -718,9 +738,10 @@ def run_with_optional_server(
                     host=args.host,
                     port=args.port,
                     extra_args=args.sglang_arg or [],
+                    api_key=None if api_key == DEFAULT_API_KEY else api_key,
                 )
                 print(f"starting SGLang for {current_spec.id}", flush=True)
-                print(" ".join(command), flush=True)
+                print(" ".join(_redact_command(command)), flush=True)
                 with server_log_path.open("w", encoding="utf-8") as server_log_file:
                     process = subprocess.Popen(
                         command,
@@ -978,6 +999,8 @@ def command_serve_lora(args: argparse.Namespace) -> int:
     adapter_dir = args.adapter_dir.resolve()
     _validate_adapter_dir(adapter_dir)
     model_id, adapter_name = _resolve_serving_metadata(adapter_dir, args.model, args.adapter_name)
+    serve_settings = RunpodServeSettings.from_env()
+    api_key = args.api_key or serve_settings.api_key
     specs = load_manifest(args.manifest)
     spec = _apply_spec_overrides(find_model(specs, model_id), args)
     command = _sglang_command(
@@ -990,6 +1013,7 @@ def command_serve_lora(args: argparse.Namespace) -> int:
             f"{adapter_name}={adapter_dir}",
             *(args.sglang_arg or []),
         ],
+        api_key=api_key,
     )
     summary = {
         "adapter_dir": str(adapter_dir),
@@ -998,7 +1022,9 @@ def command_serve_lora(args: argparse.Namespace) -> int:
         "request_model": f"{model_id}:{adapter_name}",
         "host": args.host,
         "port": args.port,
-        "command": command,
+        "api_key_configured": bool(api_key),
+        "proxy_url": serve_settings.proxy_url,
+        "command": _redact_command(command),
     }
     print(json.dumps(summary, indent=2))
     if args.dry_run:
@@ -1036,6 +1062,10 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--adapter-dir", type=Path, default=_default_bundled_adapter_dir())
     serve_parser.add_argument("--host", default="0.0.0.0")
     serve_parser.add_argument("--port", type=int, default=8000)
+    serve_parser.add_argument(
+        "--api-key",
+        help="Bearer token required for SGLang client requests. Defaults to RUNPOD_SERVE_API_KEY.",
+    )
     serve_parser.add_argument("--dry-run", action="store_true")
     serve_parser.add_argument(
         "--context-length",

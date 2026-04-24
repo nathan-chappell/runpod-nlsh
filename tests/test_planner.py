@@ -1,6 +1,6 @@
 from pydantic import ValidationError
 
-from nlsh.planner import _extract_json_fragment, _validate_planner_payload
+from nlsh.planner import _extract_json_fragment, validate_planner_payload
 from nlsh.schema import Clarification, PlanV1
 
 
@@ -28,7 +28,7 @@ Here you go:
 ```
 """.strip()
 
-    plan = _validate_planner_payload(payload, extract_json_fragment=True)
+    plan = validate_planner_payload(payload, extract_json_fragment=True)
 
     assert isinstance(plan, PlanV1)
     assert plan.steps[0].kind == "find_files"
@@ -44,7 +44,7 @@ Here you go:
 """.strip()
 
     try:
-        _validate_planner_payload(payload, extract_json_fragment=False)
+        validate_planner_payload(payload, extract_json_fragment=False)
     except ValidationError:
         pass
     else:
@@ -52,7 +52,7 @@ Here you go:
 
 
 def test_validate_planner_payload_accepts_clarification_dict() -> None:
-    output = _validate_planner_payload(
+    output = validate_planner_payload(
         {"kind": "clarification", "question": "Which page range should I extract?"},
         extract_json_fragment=False,
     )

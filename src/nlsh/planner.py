@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from nlsh.dataio import default_dataset_path, load_jsonl
 from nlsh.prompts import REPAIR_DEVELOPER_PROMPT, TRAINING_DEVELOPER_PROMPT
+from nlsh.settings import load_dotenv
 from nlsh.schema import (
     PlannerOutput,
     normalize_plan,
@@ -22,20 +23,6 @@ class Planner(Protocol):
     def plan(self, prompt: str) -> PlannerOutput: ...
 
 
-def _load_dotenv(path: Path = Path(".env")) -> None:
-    if not path.exists():
-        return
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
-            os.environ[key] = value
-
-
 @dataclass(slots=True)
 class PlannerConfig:
     model: str
@@ -45,7 +32,7 @@ class PlannerConfig:
 
     @classmethod
     def from_env(cls) -> "PlannerConfig":
-        _load_dotenv()
+        load_dotenv()
         api_key = os.environ.get("NLSH_API_KEY") or os.environ.get("HF_TOKEN") or ""
         return cls(
             model=os.environ.get("NLSH_MODEL", "microsoft/Phi-4-mini-instruct"),
@@ -53,6 +40,58 @@ class PlannerConfig:
             api_key=api_key,
             request_timeout=float(os.environ.get("NLSH_REQUEST_TIMEOUT", "60")),
         )
+
+
+def planner_chat_messages(
+    prompt: str,
+    *,
+    developer_prompt: str = TRAINING_DEVELOPER_PROMPT,
+) -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": developer_prompt},
+        {"role": "user", "content": prompt},
+    ]
+
+
+def planner_response_format() -> dict[str, Any]:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "nlsh_plan_v1",
+            "strict": True,
+            "schema": plan_json_schema(),
+        },
+    }
+
+
+def chat_completion_text(
+    *,
+    messages: list[dict[str, Any]],
+    config: PlannerConfig | None = None,
+    model: str | None = None,
+    response_format: dict[str, Any] | None = None,
+    temperature: float = 0,
+    max_tokens: int = 600,
+) -> str:
+    from openai import OpenAI
+
+    resolved_config = config or PlannerConfig.from_env()
+    client = OpenAI(
+        base_url=resolved_config.base_url,
+        api_key=resolved_config.api_key or "EMPTY",
+        timeout=resolved_config.request_timeout,
+        max_retries=0,
+    )
+    request_kwargs: dict[str, Any] = {
+        "model": model or resolved_config.model,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "messages": messages,
+    }
+    if response_format is not None:
+        request_kwargs["response_format"] = response_format
+    response = client.chat.completions.create(**request_kwargs)
+    return _extract_message_text(response.choices[0].message).strip()
 
 
 def _extract_message_text(message: object) -> str:
@@ -130,7 +169,7 @@ def _extract_json_fragment(text: str) -> str:
     return stripped
 
 
-def _validate_planner_payload(
+def validate_planner_payload(
     payload: str | bytes | dict[str, Any],
     *,
     extract_json_fragment: bool,
@@ -168,10 +207,7 @@ class OpenAIPlanner:
             "model": self.config.model,
             "temperature": 0,
             "max_tokens": 600,
-            "messages": [
-                {"role": "system", "content": developer_prompt},
-                {"role": "user", "content": prompt},
-            ],
+            "messages": planner_chat_messages(prompt, developer_prompt=developer_prompt),
             "response_format": response_format,
         }
 
@@ -211,19 +247,12 @@ class OpenAIPlanner:
             **self._request_kwargs(
                 developer_prompt=TRAINING_DEVELOPER_PROMPT,
                 prompt=prompt,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "nlsh_plan_v1",
-                        "strict": True,
-                        "schema": plan_json_schema(),
-                    },
-                },
+                response_format=planner_response_format(),
             )
         )
         raw_text = _extract_message_text(response.choices[0].message).strip()
         try:
-            return _validate_planner_payload(raw_text, extract_json_fragment=not self.strict)
+            return validate_planner_payload(raw_text, extract_json_fragment=not self.strict)
         except ValidationError as error:
             if self.strict:
                 raise
@@ -235,7 +264,7 @@ class OpenAIPlanner:
             )
             if not repaired_text:
                 raise ValueError("Planner returned empty content while attempting to repair invalid JSON.")
-            return _validate_planner_payload(repaired_text, extract_json_fragment=True)
+            return validate_planner_payload(repaired_text, extract_json_fragment=True)
 
 
 class GoldPlanner:

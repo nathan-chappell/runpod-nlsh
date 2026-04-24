@@ -11,4 +11,5 @@ tmp/
 .codex/*
 !.codex/skills/
 !.codex/skills/**
+.codex/skills/**/__pycache__
 hf_test_result.txt

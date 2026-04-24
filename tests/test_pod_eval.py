@@ -161,6 +161,7 @@ def test_runpod_bootstrap_uses_volume_caches_and_base_services() -> None:
     assert '"scripts/pod_eval.py"' in script
     assert '"serve-lora"' in script
     assert 'RUNPOD_BOOT_MODE' in script
+    assert 'RUNPOD_SERVE_API_KEY' in script
     assert "_serve_command" in script
     assert "_workflow_command" in script
     assert "_workflow_environment" in script
@@ -321,6 +322,8 @@ def test_runpod_bootstrap_main_execs_image_python(tmp_path: Path, monkeypatch: A
     monkeypatch.setattr(module.os, "chdir", lambda path: captured.setdefault("chdir", path))
     monkeypatch.delenv("POD_EVAL_EXIT_AFTER", raising=False)
     monkeypatch.delenv("RUNPOD_BOOT_MODE", raising=False)
+    monkeypatch.setenv("RUNPOD_SERVE_API_KEY", "")
+    monkeypatch.setenv("RUNPOD_POD_ID", "pod123")
 
     def fake_execvpe(executable: str, command: list[str], env: dict[str, str]) -> None:
         captured["executable"] = executable
@@ -369,6 +372,7 @@ def test_runpod_bootstrap_preserves_explicit_exit_after(tmp_path: Path, monkeypa
     monkeypatch.setattr(module.os, "chdir", lambda _path: None)
     monkeypatch.setenv("POD_EVAL_EXIT_AFTER", "1")
     monkeypatch.setenv("RUNPOD_BOOT_MODE", "workflow")
+    monkeypatch.setenv("RUNPOD_SERVE_API_KEY", "")
 
     def fake_execvpe(executable: str, command: list[str], env: dict[str, str]) -> None:
         captured["executable"] = executable
@@ -664,6 +668,7 @@ def test_pod_eval_serve_lora_dry_run(tmp_path: Path) -> None:
         check=False,
         capture_output=True,
         text=True,
+        env={**os.environ, "RUNPOD_SERVE_API_KEY": "", "RUNPOD_POD_ID": "pod123"},
     )
 
     assert result.returncode == 0, result.stderr
@@ -671,3 +676,5 @@ def test_pod_eval_serve_lora_dry_run(tmp_path: Path) -> None:
     assert payload["base_model"] == "microsoft/Phi-4-mini-instruct"
     assert payload["adapter_name"] == "nlsh-phi4-ft"
     assert payload["request_model"] == "microsoft/Phi-4-mini-instruct:nlsh-phi4-ft"
+    assert payload["api_key_configured"] is False
+    assert payload["proxy_url"] == "https://pod123-8000.proxy.runpod.net"
