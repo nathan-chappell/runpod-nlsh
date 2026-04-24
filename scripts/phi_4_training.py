@@ -8,6 +8,7 @@ import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from importlib import metadata as importlib_metadata
 from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ OOM_TEXT_PATTERNS = (
     "cublas_status_alloc_failed",
     "insufficient memory",
 )
+MIN_TORCHAO_VERSION = "0.16.0"
 
 
 @dataclass(frozen=True, slots=True)
@@ -363,6 +365,28 @@ def _make_trainer_kwargs(
     return kwargs
 
 
+def ensure_compatible_torchao() -> None:
+    if find_spec("torchao") is None:
+        return
+
+    try:
+        from packaging.version import Version
+    except ImportError as exc:  # pragma: no cover - packaging ships in training images.
+        raise RuntimeError("packaging is required to validate the optional torchao dependency") from exc
+
+    try:
+        installed_version = importlib_metadata.version("torchao")
+    except importlib_metadata.PackageNotFoundError:
+        return
+
+    if Version(installed_version) < Version(MIN_TORCHAO_VERSION):
+        raise RuntimeError(
+            "Incompatible optional dependency detected: torchao "
+            f"{installed_version} is installed, but PEFT requires torchao >= {MIN_TORCHAO_VERSION}. "
+            "Rebuild the pod image so torchao is removed from the final runtime."
+        )
+
+
 def build_dry_run_payload(args: TrainingArgs, datasets: PreparedDatasets) -> dict[str, Any]:
     return {
         "model_id": args.model_id,
@@ -409,6 +433,8 @@ def train(args: TrainingArgs, datasets: PreparedDatasets) -> None:
     torch = imports["torch"]
     transformers = imports["transformers"]
     trl = imports["trl"]
+
+    ensure_compatible_torchao()
 
     if args.torch_dtype == "bf16" and torch.cuda.is_available() and not torch.cuda.is_bf16_supported():
         print("Warning: CUDA is available but bf16 is not reported as supported.", file=sys.stderr)

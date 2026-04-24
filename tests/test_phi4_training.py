@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
 
 from nlsh.dataio import load_jsonl, partition_records
 
@@ -120,3 +121,22 @@ def test_phi4_training_reduces_footprint_before_retry() -> None:
     assert args.per_device_train_batch_size == 4
     assert args.gradient_accumulation_steps == 4
     assert args.per_device_eval_batch_size == 2
+
+
+def test_phi4_training_rejects_incompatible_torchao() -> None:
+    module = load_training_module()
+
+    with (
+        patch.object(module, "find_spec", return_value=object()),
+        patch.object(module.importlib_metadata, "version", return_value="0.9.0"),
+    ):
+        try:
+            module.ensure_compatible_torchao()
+        except RuntimeError as exc:
+            message = str(exc)
+        else:  # pragma: no cover - defensive assertion.
+            raise AssertionError("expected ensure_compatible_torchao() to fail")
+
+    assert "torchao 0.9.0" in message
+    assert "torchao >= 0.16.0" in message
+    assert "Rebuild the pod image" in message

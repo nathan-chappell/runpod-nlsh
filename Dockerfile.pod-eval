@@ -43,7 +43,14 @@ RUN mkdir -p /workspace/hf-cache /workspace/sglang-storage /workspace/tmp /works
 RUN --mount=type=cache,target=/root/.cache/pip python -m pip install --upgrade pip setuptools wheel
 RUN --mount=type=cache,target=/root/.cache/pip python -m pip install -r requirements/pod-core.txt
 RUN --mount=type=cache,target=/root/.cache/pip python -m pip install -r requirements/pod-train.txt
-RUN --mount=type=cache,target=/root/.cache/pip python -m pip install -r requirements/pod-sglang.txt
+RUN --mount=type=cache,target=/root/.cache/pip python -m pip install -r requirements/pod-sglang.txt \
+    && python -m pip uninstall -y torchao || true \
+    && python - <<'PY'
+from importlib.util import find_spec
+
+if find_spec("torchao") is not None:
+    raise SystemExit("torchao should not be present in the final pod image")
+PY
 
 COPY pyproject.toml README.md ./
 COPY src ./src
