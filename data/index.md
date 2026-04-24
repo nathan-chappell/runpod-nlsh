@@ -5,6 +5,7 @@ This is the browseable map for agents adding examples to the NLSH planner datase
 The canonical dataset lives under `data/samples/`, organized by planner behavior:
 
 - `data/samples/`: 64 canonical examples.
+- `data/splits/v1/`: materialized `train/eval/test` splits for fairer fine-tuning and held-out pod eval.
 
 All migrated rows include `focus` as the first JSON key.
 
@@ -27,6 +28,20 @@ Clarifications:
 
 - `data/samples/clarifications/pdf_extract_pages.jsonl`: 5 examples.
 - `data/samples/clarifications/pdf_merge.jsonl`: 5 examples.
+
+## Materialized Splits
+
+The Runpod workflow now defaults to the committed split tree under `data/splits/v1/`:
+
+- `data/splits/v1/train/`: 40 examples
+- `data/splits/v1/eval/`: 12 examples
+- `data/splits/v1/test/`: 12 examples
+
+These splits are generated deterministically per source file so every canonical JSONL file contributes held-out coverage. Regenerate them after changing `data/samples/`:
+
+```bash
+./.venv/bin/python scripts/materialize_dataset_splits.py
+```
 
 ## Step Coverage
 
@@ -73,7 +88,7 @@ When adding a row, keep `messages[-1].content` exactly aligned with `plan`. The 
    jq -r '.prompt' data/samples/**/*.jsonl | sort | uniq -cd
    ```
 
-5. Add the new row to the canonical file only; eval and training load `data/samples/` directly.
+5. Add the new row to the canonical file only; then regenerate `data/splits/v1/`.
 6. Validate JSONL and run focused tests before finishing.
 
 ## Useful Commands

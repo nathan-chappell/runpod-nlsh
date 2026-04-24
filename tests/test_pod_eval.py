@@ -163,10 +163,41 @@ def test_runpod_bootstrap_uses_volume_caches_and_base_services() -> None:
 def test_pod_workflow_defaults_to_priority_order() -> None:
     from nlsh.pod_workflow import DEFAULT_MODEL_ORDER, Workflow, WorkflowConfig, load_manifest
 
-    workflow = Workflow(WorkflowConfig(artifact_dir=Path("/tmp/nlsh-test-artifacts")), dry_run=True)
+    workflow = Workflow(
+        WorkflowConfig(
+            artifact_dir=Path("/tmp/nlsh-test-artifacts"),
+            selected_models=(),
+        ),
+        dry_run=True,
+    )
     ordered = workflow._ordered_models(load_manifest(Path("configs/pod_eval_models.json")))
 
     assert [model.id for model in ordered] == list(DEFAULT_MODEL_ORDER)
+
+
+def test_pod_workflow_defaults_to_phi4_only_selection() -> None:
+    from nlsh.pod_workflow import DEFAULT_SELECTED_MODELS, Workflow, WorkflowConfig, load_manifest
+
+    workflow = Workflow(WorkflowConfig(artifact_dir=Path("/tmp/nlsh-test-artifacts")), dry_run=True)
+    ordered = workflow._ordered_models(load_manifest(Path("configs/pod_eval_models.json")))
+
+    assert workflow.config.selected_models == DEFAULT_SELECTED_MODELS
+    assert [model.id for model in ordered] == list(DEFAULT_SELECTED_MODELS)
+
+
+def test_pod_workflow_selected_models_filters_manifest() -> None:
+    from nlsh.pod_workflow import Workflow, WorkflowConfig, load_manifest
+
+    workflow = Workflow(
+        WorkflowConfig(
+            artifact_dir=Path("/tmp/nlsh-test-artifacts"),
+            selected_models=("microsoft/Phi-4-mini-instruct",),
+        ),
+        dry_run=True,
+    )
+    ordered = workflow._ordered_models(load_manifest(Path("configs/pod_eval_models.json")))
+
+    assert [model.id for model in ordered] == ["microsoft/Phi-4-mini-instruct"]
 
 
 def test_pyproject_declares_training_extra() -> None:
@@ -376,6 +407,20 @@ def test_pod_workflow_dry_run(tmp_path: Path) -> None:
     state = json.loads((tmp_path / "nlsh-artifacts" / "workflow_state.json").read_text())
     assert state["dry_run"] is True
     assert (tmp_path / "nlsh-artifacts" / "last_exit_code").read_text().strip() == "0"
+
+
+def test_pod_workflow_defaults_to_materialized_splits_when_available(monkeypatch: Any) -> None:
+    from nlsh.pod_workflow import WorkflowConfig
+
+    monkeypatch.setenv("POD_EVAL_APP_DIR", str(Path.cwd()))
+
+    config = WorkflowConfig()
+
+    assert config.dataset == Path.cwd() / "data/splits/v1/test"
+    assert config.train_dataset == Path.cwd() / "data/splits/v1/train"
+    assert config.train_eval_dataset == Path.cwd() / "data/splits/v1/eval"
+    assert config.exit_after is True
+    assert config.selected_models == ("microsoft/Phi-4-mini-instruct",)
 
 
 def test_pod_workflow_runs_eval_then_training_then_post_training_eval(tmp_path: Path, monkeypatch: Any) -> None:

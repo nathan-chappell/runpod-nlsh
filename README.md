@@ -97,9 +97,9 @@ The pod eval and fine-tuning flow builds on Runpod's PyTorch base image and inst
 
 ```bash
 docker build -f Dockerfile.pod-eval \
-  -t YOUR_DOCKERHUB_USER/runpod-nlsh:0.2.2 \
+  -t YOUR_DOCKERHUB_USER/runpod-nlsh:0.2.3 \
   -t YOUR_DOCKERHUB_USER/runpod-nlsh:latest .
-docker push YOUR_DOCKERHUB_USER/runpod-nlsh:0.2.2
+docker push YOUR_DOCKERHUB_USER/runpod-nlsh:0.2.3
 docker push YOUR_DOCKERHUB_USER/runpod-nlsh:latest
 ```
 
@@ -109,7 +109,7 @@ The default base is `runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404`. To try an
 Create a Runpod pod with:
 
 - GPU: RTX 4090 or another 32 GB+ GPU
-- Image: `YOUR_DOCKERHUB_USER/runpod-nlsh:0.2.2`
+- Image: `YOUR_DOCKERHUB_USER/runpod-nlsh:0.2.3`
 - Persistent or network volume mounted at `/workspace`
 - `HF_TOKEN` set from a Runpod secret
 - Recommended volume size: at least 100 GB
@@ -125,7 +125,9 @@ The Typer workflow logs the resolved configuration and execution plan, then:
 4. fine-tunes Phi-4-mini with `scripts/phi_4_training.py`
 5. serves the trained adapter with SGLang LoRA support and re-evaluates the fine-tuned Phi-4 adapter
 
-Baseline evals and training now keep incremental state on disk so a failure does not erase the run history. The workflow writes `/workspace/nlsh-artifacts/workflow_state.json`; each model eval writes `run_state.json`, `report.json`, and `eval.log`; OOM retries preserve prior attempt artifacts as `*.attempt-N.*`; and training writes `training_state.json` plus regular checkpoints under the output directory. Reports go to `/workspace/nlsh-artifacts`, the adapter goes to `/workspace/nlsh-finetune/phi-4-mini-instruct-lora`, and exit codes are recorded in `/workspace/nlsh-artifacts/last_eval_exit_code`, `/workspace/nlsh-artifacts/last_training_exit_code`, `/workspace/nlsh-artifacts/last_post_training_eval_exit_code`, and `/workspace/nlsh-artifacts/last_exit_code`. Set `POD_EVAL_EXIT_AFTER=1` to exit after the batch instead of keeping the container alive for inspection.
+For serious runs, the workflow now defaults to committed `train/eval/test` splits under `data/splits/v1/`: baseline eval and post-training eval use `data/splits/v1/test`, while training uses `data/splits/v1/train` plus `data/splits/v1/eval`. The canonical source dataset remains `data/samples/`.
+
+Baseline evals and training now keep incremental state on disk so a failure does not erase the run history. The workflow writes `/workspace/nlsh-artifacts/workflow_state.json`; each model eval writes `run_state.json`, `report.json`, and `eval.log`; OOM retries preserve prior attempt artifacts as `*.attempt-N.*`; and training writes `training_state.json` plus regular checkpoints under the output directory. Reports go to `/workspace/nlsh-artifacts`, the adapter goes to `/workspace/nlsh-finetune/phi-4-mini-instruct-lora`, and exit codes are recorded in `/workspace/nlsh-artifacts/last_eval_exit_code`, `/workspace/nlsh-artifacts/last_training_exit_code`, `/workspace/nlsh-artifacts/last_post_training_eval_exit_code`, and `/workspace/nlsh-artifacts/last_exit_code`. The default behavior is now to run the selected batch and exit; set `POD_EVAL_EXIT_AFTER=0` if you want the container to stay alive for inspection.
 
 The Runpod PyTorch base image may include `/start.sh` for base-image services such as SSH or notebook processes. Runpod's custom-template docs describe this as the base-service startup path, so the bootstrap runs it by default when it exists. Set `RUNPOD_START_BASE_SERVICES=0` only if you want application-only startup.
 
@@ -150,11 +152,13 @@ You can also run commands manually in the pod:
 ```bash
 export HF_HOME=/workspace/hf-cache
 python scripts/pod_eval.py download-models
-python scripts/pod_eval.py run-suite --dataset data/samples
+python scripts/pod_eval.py run-suite --dataset data/splits/v1/test
 python -m nlsh.pod_workflow run --dry-run
 ```
 
-The manifest is `configs/pod_eval_models.json`. It currently evaluates `microsoft/Phi-4-mini-instruct`, `HuggingFaceTB/SmolLM3-3B`, and `Qwen/Qwen3-8B` through SGLang with conservative single-GPU settings. The default `sglang_args` disable CUDA graph capture and force Triton attention plus PyTorch sampling, which is a safer starting point on Runpod Blackwell/RTX 5090 pods using the CUDA 12.8 base image. Downloads run in parallel; eval stays sequential in the preferred order so one GPU is used predictably. If an SGLang startup or serve attempt fails with an OOM, `scripts/pod_eval.py` retries with smaller `max_running_requests`, then shorter `context_length`, then lower `mem_fraction_static` until it hits the configured floor. If training hits an OOM, `scripts/phi_4_training.py` retries with smaller batch sizes, then shorter sequence length, resuming from the latest checkpoint when one exists.
+The manifest is `configs/pod_eval_models.json`. It currently evaluates `microsoft/Phi-4-mini-instruct`, `HuggingFaceTB/SmolLM3-3B`, and `Qwen/Qwen3-8B` through SGLang with conservative single-GPU settings. The default `sglang_args` disable CUDA graph capture and force Triton attention plus PyTorch sampling, which is a safer starting point on Runpod Blackwell/RTX 5090 pods using the CUDA 12.8 base image. Downloads run in parallel; eval stays sequential in the preferred order so one GPU is used predictably. The workflow now defaults `POD_EVAL_SELECTED_MODELS` to Phi-4 only, which keeps serious training runs focused on the main model unless you explicitly broaden the batch. If an SGLang startup or serve attempt fails with an OOM, `scripts/pod_eval.py` retries with smaller `max_running_requests`, then shorter `context_length`, then lower `mem_fraction_static` until it hits the configured floor. If training hits an OOM, `scripts/phi_4_training.py` retries with smaller batch sizes, then shorter sequence length, resuming from the latest checkpoint when one exists.
+
+Set `POD_EVAL_SELECTED_MODELS` to a comma-separated subset when you want to rerun a different batch, for example `POD_EVAL_SELECTED_MODELS=microsoft/Phi-4-mini-instruct,HuggingFaceTB/SmolLM3-3B`.
 
 For local non-GPU checks, validate the manifest and exercise the eval path with the gold planner:
 
@@ -165,7 +169,7 @@ For local non-GPU checks, validate the manifest and exercise the eval path with 
 
 ## Dataset And Training
 
-The canonical, coverage-organized examples live in `data/samples/`; see `data/index.md` for the current map. Eval, pod eval, gold planning, and fine-tuning all default to this directory.
+The canonical, coverage-organized examples live in `data/samples/`; see `data/index.md` for the current map. Materialized fair splits live under `data/splits/v1/`.
 
 Each row includes:
 
@@ -183,7 +187,11 @@ python scripts/phi_4_training.py \
   --output-dir /workspace/nlsh-finetune/phi-4-mini-instruct-lora
 ```
 
-By default the training script deterministically partitions `data/samples/` into train/eval records. Use `--no-eval` to train on all canonical examples.
+By default the standalone training script still deterministically partitions `data/samples/` into train/eval records. The Runpod workflow now prefers the committed `data/splits/v1/train`, `data/splits/v1/eval`, and `data/splits/v1/test` tree so post-training evaluation stays held out from the training examples. The current split is `40` train, `12` eval, and `12` test. Regenerate those splits after editing the canonical data:
+
+```bash
+./.venv/bin/python scripts/materialize_dataset_splits.py
+```
 
 The script uses regular bf16 LoRA by default, maps dataset `developer` messages to chat `system` messages, trains on prompt/completion examples, and starts with `target_modules=["qkv_proj"]`, `r=8`, `lora_alpha=16`, and `lora_dropout=0.05`. It defaults to `--no-trust-remote-code` for Phi-4 so it can use the native `transformers` `Phi3*` classes and avoid upstream remote-code drift. It tries FlashAttention 2 when installed and otherwise falls back to SDPA. Checkpoints go under `--output-dir/checkpoint-*`; the final PEFT adapter is saved directly in `--output-dir`.
 

@@ -21,6 +21,9 @@ DEFAULT_MODEL_ORDER = (
     "HuggingFaceTB/SmolLM3-3B",
     "Qwen/Qwen3-8B",
 )
+DEFAULT_SELECTED_MODELS = (
+    "microsoft/Phi-4-mini-instruct",
+)
 DEFAULT_API_KEY = "EMPTY"
 POST_TRAINING_ADAPTER_NAME = "nlsh-phi4-ft"
 
@@ -36,6 +39,10 @@ def _default_app_dir() -> Path:
     return Path(os.environ.get("POD_EVAL_APP_DIR", Path.cwd()))
 
 
+def _default_split_dir() -> Path:
+    return _default_app_dir() / "data" / "splits" / "v1"
+
+
 def _default_workspace_dir() -> Path:
     raw_value = os.environ.get("POD_EVAL_WORKSPACE")
     if raw_value:
@@ -44,6 +51,36 @@ def _default_workspace_dir() -> Path:
     if workspace.exists():
         return workspace
     return Path("artifacts/pod-workspace")
+
+
+def _split_path(name: str) -> Path:
+    return _default_split_dir() / name
+
+
+def _default_eval_dataset() -> Path:
+    raw_value = os.environ.get("POD_EVAL_DATASET")
+    if raw_value:
+        return Path(raw_value)
+    split_path = _split_path("test")
+    if split_path.exists():
+        return split_path
+    return _default_app_dir() / "data/samples"
+
+
+def _default_train_dataset() -> Path | None:
+    raw_value = os.environ.get("POD_EVAL_TRAIN_DATASET")
+    if raw_value:
+        return Path(raw_value)
+    split_path = _split_path("train")
+    return split_path if split_path.exists() else None
+
+
+def _default_train_eval_dataset() -> Path | None:
+    raw_value = os.environ.get("POD_EVAL_TRAIN_EVAL_DATASET")
+    if raw_value:
+        return Path(raw_value)
+    split_path = _split_path("eval")
+    return split_path if split_path.exists() else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,12 +104,7 @@ class WorkflowConfig:
             _default_workspace_dir() / "nlsh-artifacts",
         )
     ))
-    dataset: Path = field(default_factory=lambda: Path(
-        os.environ.get(
-            "POD_EVAL_DATASET",
-            _default_app_dir() / "data/samples",
-        )
-    ))
+    dataset: Path = field(default_factory=_default_eval_dataset)
     manifest: Path = field(default_factory=lambda: Path(
         os.environ.get(
             "POD_EVAL_MANIFEST",
@@ -85,8 +117,8 @@ class WorkflowConfig:
             _default_app_dir() / "data/samples",
         )
     ))
-    train_dataset: Path | None = field(default_factory=lambda: _optional_path("POD_EVAL_TRAIN_DATASET"))
-    train_eval_dataset: Path | None = field(default_factory=lambda: _optional_path("POD_EVAL_TRAIN_EVAL_DATASET"))
+    train_dataset: Path | None = field(default_factory=_default_train_dataset)
+    train_eval_dataset: Path | None = field(default_factory=_default_train_eval_dataset)
     train_output_dir: Path = field(default_factory=lambda: Path(
         os.environ.get(
             "POD_EVAL_TRAIN_OUTPUT_DIR",
@@ -105,12 +137,17 @@ class WorkflowConfig:
     skip_downloads: bool = field(default_factory=lambda: _env_bool("POD_EVAL_SKIP_DOWNLOADS", False))
     skip_post_training_eval: bool = field(default_factory=lambda: _env_bool("POD_EVAL_SKIP_POST_TRAINING_EVAL", False))
     local_files_only: bool = field(default_factory=lambda: _env_bool("POD_EVAL_LOCAL_FILES_ONLY", False))
-    exit_after: bool = field(default_factory=lambda: _env_bool("POD_EVAL_EXIT_AFTER", False))
+    exit_after: bool = field(default_factory=lambda: _env_bool("POD_EVAL_EXIT_AFTER", True))
     api_key: str = field(default_factory=lambda: os.environ.get("POD_EVAL_API_KEY", DEFAULT_API_KEY))
     python_executable: str = field(default_factory=lambda: os.environ.get("POD_EVAL_PYTHON", sys.executable))
     model_order: tuple[str, ...] = field(default_factory=lambda: tuple(
         item.strip()
         for item in os.environ.get("POD_EVAL_MODEL_ORDER", ",".join(DEFAULT_MODEL_ORDER)).split(",")
+        if item.strip()
+    ))
+    selected_models: tuple[str, ...] = field(default_factory=lambda: tuple(
+        item.strip()
+        for item in os.environ.get("POD_EVAL_SELECTED_MODELS", ",".join(DEFAULT_SELECTED_MODELS)).split(",")
         if item.strip()
     ))
     eval_args: tuple[str, ...] = field(default_factory=lambda: tuple(shlex.split(os.environ.get("POD_EVAL_EVAL_ARGS", ""))))
@@ -190,6 +227,7 @@ class Workflow:
             "local_files_only": self.config.local_files_only,
             "exit_after": self.config.exit_after,
             "model_order": list(self.config.model_order),
+            "selected_models": list(self.config.selected_models),
             "eval_args": list(self.config.eval_args),
             "sglang_args": list(self.config.sglang_args),
             "train_args": list(self.config.train_args),
@@ -224,6 +262,13 @@ class Workflow:
 
     def _ordered_models(self, models: list[WorkflowModel]) -> list[WorkflowModel]:
         by_id = {model.id: model for model in models}
+        if self.config.selected_models:
+            missing = [model_id for model_id in self.config.selected_models if model_id not in by_id]
+            if missing:
+                missing_list = ", ".join(missing)
+                raise ValueError(f"selected model ids not found in manifest: {missing_list}")
+            return [by_id[model_id] for model_id in self.config.selected_models]
+
         ordered: list[WorkflowModel] = []
         for model_id in self.config.model_order:
             model = by_id.get(model_id)
