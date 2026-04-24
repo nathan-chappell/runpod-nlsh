@@ -4,7 +4,7 @@ This is the browseable map for agents adding examples to the NLSH planner datase
 
 The canonical dataset lives under `data/samples/`, organized by planner behavior:
 
-- `data/samples/`: 128 canonical examples.
+- `data/samples/`: 139 canonical examples.
 - `data/splits/v1/`: materialized `train/eval/test` splits for fairer fine-tuning and held-out pod eval.
 
 All migrated rows include `focus` as the first JSON key.
@@ -13,8 +13,8 @@ All migrated rows include `focus` as the first JSON key.
 
 Plans:
 
-- `data/samples/plans/find_files.jsonl`: 10 examples.
-- `data/samples/plans/pdf_merge.jsonl`: 10 examples.
+- `data/samples/plans/find_files.jsonl`: 14 examples.
+- `data/samples/plans/pdf_merge.jsonl`: 12 examples.
 - `data/samples/plans/pdf_extract_pages.jsonl`: 10 examples.
 - `data/samples/plans/pdf_search_text.jsonl`: 10 examples.
 - `data/samples/plans/csv_to_json.jsonl`: 10 examples.
@@ -22,12 +22,12 @@ Plans:
 - `data/samples/plans/json_select_fields.jsonl`: 10 examples.
 - `data/samples/plans/json_sort.jsonl`: 10 examples.
 - `data/samples/plans/json_group_count.jsonl`: 10 examples.
-- `data/samples/plans/pipelines.jsonl`: 18 multi-step examples.
+- `data/samples/plans/pipelines.jsonl`: 21 multi-step examples.
 
 Clarifications:
 
 - `data/samples/clarifications/pdf_extract_pages.jsonl`: 10 examples.
-- `data/samples/clarifications/pdf_merge.jsonl`: 10 examples.
+- `data/samples/clarifications/pdf_merge.jsonl`: 12 examples.
 
 ## Materialized Splits
 
@@ -47,14 +47,14 @@ These splits are generated deterministically per source file so every canonical 
 
 Current plan-step coverage across all canonical plan samples:
 
-- `find_files`: 21
-- `pdf_merge`: 13
+- `find_files`: 28
+- `pdf_merge`: 15
 - `pdf_extract_pages`: 10
 - `pdf_search_text`: 13
 - `csv_to_json`: 17
-- `json_filter`: 14
-- `json_select_fields`: 13
-- `json_sort`: 12
+- `json_filter`: 15
+- `json_select_fields`: 14
+- `json_sort`: 13
 - `json_group_count`: 13
 
 ## Row Convention
