@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nlsh"
-version = "0.3.0"
+version = "0.4.0"
 description = "Natural-language file, PDF, and JSON workflow compiler."
 readme = "README.md"
 requires-python = ">=3.11"

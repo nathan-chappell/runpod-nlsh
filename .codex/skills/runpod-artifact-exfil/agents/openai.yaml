@@ -1,0 +1,4 @@
+interface:
+  display_name: "Runpod Artifact Exfil"
+  short_description: "Pull Runpod artifacts and summarize runs"
+  default_prompt: "Use $runpod-artifact-exfil to fetch a Runpod pod's artifacts and summarize the results."

@@ -60,6 +60,7 @@ RUN --mount=type=cache,target=/root/.cache/pip python -m pip install --no-deps .
 COPY data ./data
 COPY configs ./configs
 COPY scripts ./scripts
+COPY deploy/bundled-adapter/current ./bundled-adapter/current
 
 RUN chmod +x scripts/pod_eval.py scripts/runpod_bootstrap.py
 

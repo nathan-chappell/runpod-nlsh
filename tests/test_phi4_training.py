@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -59,6 +60,11 @@ def test_phi4_training_dry_run() -> None:
     assert payload["training"]["gradient_accumulation_steps"] == 4
     assert payload["training"]["learning_rate"] == 5.0e-4
     assert payload["training"]["num_train_epochs"] == 10.0
+    expected_steps_per_epoch = math.ceil(math.ceil(len(expected_records) / 4) / 4)
+    assert payload["training"]["steps_per_epoch"] == expected_steps_per_epoch
+    assert payload["training"]["logging_steps"] == min(10, expected_steps_per_epoch)
+    assert payload["training"]["evaluation_strategy"] == "no"
+    assert payload["training"]["save_strategy"] == "epoch"
 
 
 def test_phi4_training_auto_partitions_default_dataset() -> None:
@@ -145,3 +151,63 @@ def test_phi4_training_rejects_incompatible_torchao() -> None:
     assert "torchao 0.9.0" in message
     assert "torchao >= 0.16.0" in message
     assert "Rebuild the pod image" in message
+
+
+def test_phi4_training_normalizes_metric_history(tmp_path: Path) -> None:
+    module = load_training_module()
+    rows = module._normalize_metric_history(
+        [
+            {
+                "step": 10,
+                "epoch": 2.0,
+                "loss": 1.23,
+                "learning_rate": 0.001,
+                "grad_norm": 0.4,
+                "mean_token_accuracy": 0.8,
+                "entropy": 1.5,
+            },
+            {
+                "step": 10,
+                "epoch": 2.0,
+                "eval_loss": 0.5,
+                "eval_mean_token_accuracy": 0.9,
+                "eval_entropy": 1.2,
+                "eval_runtime": 0.2,
+            },
+        ]
+    )
+
+    assert rows == [
+        {
+            "phase": "train",
+            "step": 10,
+            "epoch": 2.0,
+            "loss": 1.23,
+            "token_accuracy": 0.8,
+            "entropy": 1.5,
+            "learning_rate": 0.001,
+            "grad_norm": 0.4,
+            "num_tokens": None,
+        },
+        {
+            "phase": "eval",
+            "step": 10,
+            "epoch": 2.0,
+            "loss": 0.5,
+            "token_accuracy": 0.9,
+            "entropy": 1.2,
+            "learning_rate": None,
+            "grad_norm": None,
+            "num_tokens": None,
+            "runtime": 0.2,
+            "samples_per_second": None,
+            "steps_per_second": None,
+        },
+    ]
+
+    json_path, csv_path = module._write_metrics_history(tmp_path, rows)
+
+    assert json.loads(json_path.read_text()) == rows
+    csv_text = csv_path.read_text()
+    assert "phase,step,epoch,loss" in csv_text
+    assert "train,10,2.0,1.23" in csv_text

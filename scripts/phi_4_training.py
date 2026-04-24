@@ -6,6 +6,7 @@ import json
 import math
 import os
 import sys
+import csv
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib import metadata as importlib_metadata
@@ -264,7 +265,7 @@ def _training_imports() -> dict[str, Any]:
 
 
 def _sft_config_kwargs(args: TrainingArgs, has_eval: bool) -> dict[str, Any]:
-    eval_strategy = "steps" if has_eval else "no"
+    eval_strategy = "epoch" if has_eval else "no"
     kwargs: dict[str, Any] = {
         "output_dir": str(args.output_dir),
         "overwrite_output_dir": args.overwrite_output_dir,
@@ -279,7 +280,7 @@ def _sft_config_kwargs(args: TrainingArgs, has_eval: bool) -> dict[str, Any]:
         "per_device_train_batch_size": args.per_device_train_batch_size,
         "per_device_eval_batch_size": args.per_device_eval_batch_size,
         "save_steps": args.save_steps,
-        "save_strategy": "steps",
+        "save_strategy": "epoch",
         "save_total_limit": args.save_total_limit,
         "seed": args.seed,
         "gradient_checkpointing": args.gradient_checkpointing,
@@ -393,6 +394,7 @@ def ensure_compatible_torchao() -> None:
 
 
 def build_dry_run_payload(args: TrainingArgs, datasets: PreparedDatasets) -> dict[str, Any]:
+    steps_per_epoch = _optimizer_steps_per_epoch(args, datasets)
     return {
         "model_id": args.model_id,
         "dataset": str(args.dataset),
@@ -424,11 +426,97 @@ def build_dry_run_payload(args: TrainingArgs, datasets: PreparedDatasets) -> dic
             "learning_rate": args.learning_rate,
             "num_train_epochs": args.num_train_epochs,
             "max_length": args.max_length,
+            "steps_per_epoch": steps_per_epoch,
+            "logging_steps": _resolved_logging_steps(args, datasets),
+            "logging_strategy": "steps",
             "save_steps": args.save_steps,
+            "save_strategy": "epoch",
+            "evaluation_strategy": "no" if datasets.eval is None else "epoch",
             "save_total_limit": args.save_total_limit,
             "oom_retries": args.oom_retries,
         },
     }
+
+
+def _optimizer_steps_per_epoch(args: TrainingArgs, datasets: PreparedDatasets) -> int:
+    micro_batches = math.ceil(len(datasets.train) / args.per_device_train_batch_size)
+    return max(1, math.ceil(micro_batches / args.gradient_accumulation_steps))
+
+
+def _resolved_logging_steps(args: TrainingArgs, datasets: PreparedDatasets) -> int:
+    steps_per_epoch = _optimizer_steps_per_epoch(args, datasets)
+    max_window = steps_per_epoch
+    if args.max_steps > 0:
+        max_window = min(max_window, args.max_steps)
+    return max(1, min(args.logging_steps, max_window))
+
+
+def _normalize_metric_history(log_history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in log_history:
+        step = item.get("step")
+        epoch = item.get("epoch")
+        if not isinstance(step, (int, float)):
+            continue
+        if "loss" in item or "learning_rate" in item or "grad_norm" in item:
+            rows.append(
+                {
+                    "phase": "train",
+                    "step": step,
+                    "epoch": epoch,
+                    "loss": item.get("loss"),
+                    "token_accuracy": item.get("mean_token_accuracy"),
+                    "entropy": item.get("entropy"),
+                    "learning_rate": item.get("learning_rate"),
+                    "grad_norm": item.get("grad_norm"),
+                    "num_tokens": item.get("num_tokens"),
+                }
+            )
+        if "eval_loss" in item:
+            rows.append(
+                {
+                    "phase": "eval",
+                    "step": step,
+                    "epoch": epoch,
+                    "loss": item.get("eval_loss"),
+                    "token_accuracy": item.get("eval_mean_token_accuracy"),
+                    "entropy": item.get("eval_entropy"),
+                    "learning_rate": None,
+                    "grad_norm": None,
+                    "num_tokens": item.get("eval_num_tokens"),
+                    "runtime": item.get("eval_runtime"),
+                    "samples_per_second": item.get("eval_samples_per_second"),
+                    "steps_per_second": item.get("eval_steps_per_second"),
+                }
+            )
+    return rows
+
+
+def _write_metrics_history(output_dir: Path, rows: list[dict[str, Any]]) -> tuple[Path, Path]:
+    json_path = output_dir / "metrics_history.json"
+    csv_path = output_dir / "metrics_history.csv"
+    json_path.write_text(json.dumps(rows, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    fieldnames = [
+        "phase",
+        "step",
+        "epoch",
+        "loss",
+        "token_accuracy",
+        "entropy",
+        "learning_rate",
+        "grad_norm",
+        "num_tokens",
+        "runtime",
+        "samples_per_second",
+        "steps_per_second",
+    ]
+    with csv_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key) for key in fieldnames})
+    return json_path, csv_path
 
 
 def train(args: TrainingArgs, datasets: PreparedDatasets) -> None:
@@ -470,6 +558,7 @@ def train(args: TrainingArgs, datasets: PreparedDatasets) -> None:
         target_modules=args.target_modules,
         modules_to_save=None,
     )
+    args.logging_steps = _resolved_logging_steps(args, datasets)
     sft_config = _make_sft_config(trl.SFTConfig, args, has_eval=eval_dataset is not None)
     trainer = trl.SFTTrainer(
         **_make_trainer_kwargs(
@@ -487,6 +576,8 @@ def train(args: TrainingArgs, datasets: PreparedDatasets) -> None:
     trainer.log_metrics("train", train_result.metrics)
     trainer.save_metrics("train", train_result.metrics)
     trainer.save_state()
+    metrics_history = _normalize_metric_history(list(trainer.state.log_history))
+    metrics_history_json, metrics_history_csv = _write_metrics_history(args.output_dir, metrics_history)
     trainer.save_model(str(args.output_dir))
     tokenizer.save_pretrained(str(args.output_dir))
 
@@ -500,6 +591,8 @@ def train(args: TrainingArgs, datasets: PreparedDatasets) -> None:
         "adapter_type": "lora",
         "resolved_attention_implementation": resolved_attention,
         "source": "scripts/phi_4_training.py",
+        "metrics_history_json": str(metrics_history_json),
+        "metrics_history_csv": str(metrics_history_csv),
         "args": build_dry_run_payload(args, datasets),
     }
     (args.output_dir / "adapter_run_info.json").write_text(
@@ -590,6 +683,9 @@ def _training_state_payload(args: TrainingArgs, datasets: PreparedDatasets) -> d
         "output_dir": str(args.output_dir),
         "attempts": [],
         "resolved_args": build_dry_run_payload(args, datasets),
+        "metrics_history_json": None,
+        "metrics_history_csv": None,
+        "trainer_state_path": None,
     }
 
 
@@ -620,8 +716,17 @@ def train_with_retries(args: TrainingArgs, datasets: PreparedDatasets) -> None:
             train(args, datasets)
             attempt_state["status"] = "completed"
             attempt_state["finished_at"] = _utc_now()
+            metrics_history_json = args.output_dir / "metrics_history.json"
+            metrics_history_csv = args.output_dir / "metrics_history.csv"
+            trainer_state_path = args.output_dir / "trainer_state.json"
+            attempt_state["metrics_history_json"] = str(metrics_history_json)
+            attempt_state["metrics_history_csv"] = str(metrics_history_csv)
+            attempt_state["trainer_state_path"] = str(trainer_state_path)
             state["status"] = "completed"
             state["finished_at"] = attempt_state["finished_at"]
+            state["metrics_history_json"] = str(metrics_history_json)
+            state["metrics_history_csv"] = str(metrics_history_csv)
+            state["trainer_state_path"] = str(trainer_state_path)
             _write_json(state_path, state)
             return
         except Exception as exc:

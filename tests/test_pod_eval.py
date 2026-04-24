@@ -53,8 +53,15 @@ def test_pod_eval_help() -> None:
     assert result.returncode == 0
     assert "download-models" in result.stdout
     assert "run-suite" in result.stdout
+    assert "serve-lora" in result.stdout
     assert "--request-model" in subprocess.run(
         [sys.executable, "scripts/pod_eval.py", "run-model", "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert "--adapter-dir" in subprocess.run(
+        [sys.executable, "scripts/pod_eval.py", "serve-lora", "--help"],
         check=False,
         capture_output=True,
         text=True,
@@ -133,6 +140,7 @@ def test_pod_eval_dockerfile_uses_runpod_base() -> None:
     assert "python -m pip install --no-deps ." in dockerfile
     assert dockerfile.index("COPY src ./src") < dockerfile.index("python -m pip install --no-deps .")
     assert dockerfile.index("python -m pip install --no-deps .") < dockerfile.index("COPY data ./data")
+    assert "COPY deploy/bundled-adapter/current ./bundled-adapter/current" in dockerfile
     assert "python -m pip install --no-cache-dir -e ." not in dockerfile
     assert "python scripts/pod_eval.py download-models" not in dockerfile
     assert "openssh-server" not in dockerfile
@@ -150,6 +158,10 @@ def test_runpod_bootstrap_uses_volume_caches_and_base_services() -> None:
     assert '_env_bool("POD_EVAL_START_RUNPOD_SERVICES", True)' in script
     assert 'Path("/start.sh")' in script
     assert '"-m", "nlsh.pod_workflow", "run"' in script
+    assert '"scripts/pod_eval.py"' in script
+    assert '"serve-lora"' in script
+    assert 'RUNPOD_BOOT_MODE' in script
+    assert "_serve_command" in script
     assert "_workflow_command" in script
     assert "_workflow_environment" in script
     assert "os.execvpe(command[0], command, env)" in script
@@ -308,6 +320,7 @@ def test_runpod_bootstrap_main_execs_image_python(tmp_path: Path, monkeypatch: A
     monkeypatch.setattr(module.sys, "executable", "/usr/bin/image-python")
     monkeypatch.setattr(module.os, "chdir", lambda path: captured.setdefault("chdir", path))
     monkeypatch.delenv("POD_EVAL_EXIT_AFTER", raising=False)
+    monkeypatch.delenv("RUNPOD_BOOT_MODE", raising=False)
 
     def fake_execvpe(executable: str, command: list[str], env: dict[str, str]) -> None:
         captured["executable"] = executable
@@ -324,8 +337,20 @@ def test_runpod_bootstrap_main_execs_image_python(tmp_path: Path, monkeypatch: A
     assert captured["services"] is True
     assert captured["chdir"] == app_dir
     assert captured["executable"] == "/usr/bin/image-python"
-    assert captured["command"] == ["/usr/bin/image-python", "-m", "nlsh.pod_workflow", "run"]
-    assert captured["env"]["POD_EVAL_EXIT_AFTER"] == "1"
+    assert captured["command"] == [
+        "/usr/bin/image-python",
+        "scripts/pod_eval.py",
+        "--manifest",
+        str(app_dir / "configs/pod_eval_models.json"),
+        "serve-lora",
+        "--adapter-dir",
+        str(app_dir / "bundled-adapter" / "current"),
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+    ]
+    assert captured["env"].get("POD_EVAL_EXIT_AFTER") is None
 
 
 def test_runpod_bootstrap_preserves_explicit_exit_after(tmp_path: Path, monkeypatch: Any) -> None:
@@ -343,6 +368,7 @@ def test_runpod_bootstrap_preserves_explicit_exit_after(tmp_path: Path, monkeypa
     monkeypatch.setattr(module.sys, "executable", "/usr/bin/image-python")
     monkeypatch.setattr(module.os, "chdir", lambda _path: None)
     monkeypatch.setenv("POD_EVAL_EXIT_AFTER", "1")
+    monkeypatch.setenv("RUNPOD_BOOT_MODE", "workflow")
 
     def fake_execvpe(executable: str, command: list[str], env: dict[str, str]) -> None:
         captured["executable"] = executable
@@ -369,6 +395,7 @@ def test_runpod_startup_python_syntax() -> None:
             str(BOOTSTRAP_SCRIPT),
             "src/nlsh/pod_workflow.py",
             "scripts/pod_eval.py",
+            "scripts/stage_serving_adapter.py",
         ],
         check=False,
         capture_output=True,
@@ -613,3 +640,34 @@ def test_pod_eval_reduces_spec_for_oom() -> None:
         "context_length": {"from": 4096, "to": 2048},
         "mem_fraction_static": {"from": 0.85, "to": 0.8},
     }
+
+
+def test_pod_eval_serve_lora_dry_run(tmp_path: Path) -> None:
+    adapter_dir = tmp_path / "adapter"
+    adapter_dir.mkdir()
+    (adapter_dir / "adapter_model.safetensors").write_text("weights", encoding="utf-8")
+    (adapter_dir / "adapter_config.json").write_text("{}", encoding="utf-8")
+    (adapter_dir / "bundled_adapter_manifest.json").write_text(
+        json.dumps({"base_model": "microsoft/Phi-4-mini-instruct", "adapter_name": "nlsh-phi4-ft"}),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/pod_eval.py",
+            "serve-lora",
+            "--adapter-dir",
+            str(adapter_dir),
+            "--dry-run",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["base_model"] == "microsoft/Phi-4-mini-instruct"
+    assert payload["adapter_name"] == "nlsh-phi4-ft"
+    assert payload["request_model"] == "microsoft/Phi-4-mini-instruct:nlsh-phi4-ft"

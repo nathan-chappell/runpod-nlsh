@@ -27,6 +27,7 @@ DEFAULT_DATASET = REPO_ROOT / "data/samples"
 DEFAULT_MANIFEST = REPO_ROOT / "configs/pod_eval_models.json"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "artifacts/pod_eval"
 DEFAULT_API_KEY = "EMPTY"
+DEFAULT_ADAPTER_NAME = "nlsh-phi4-ft"
 OOM_TEXT_PATTERNS = (
     "out of memory",
     "cuda error: out of memory",
@@ -139,6 +140,19 @@ def _tail_text(path: Path, line_count: int = 220) -> str:
         return ""
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     return "\n".join(lines[-line_count:])
+
+
+def _default_bundled_adapter_dir() -> Path:
+    repo_staging_dir = REPO_ROOT / "deploy" / "bundled-adapter" / "current"
+    if repo_staging_dir.exists():
+        return repo_staging_dir
+    return REPO_ROOT / "bundled-adapter" / "current"
+
+
+def _read_json_or_none(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _is_oom_text(text: str) -> bool:
@@ -280,6 +294,30 @@ def _sglang_command(
     command.extend(spec.sglang_args)
     command.extend(extra_args)
     return command
+
+
+def _resolve_serving_metadata(adapter_dir: Path, explicit_model: str | None, explicit_adapter_name: str | None) -> tuple[str, str]:
+    manifest = _read_json_or_none(adapter_dir / "bundled_adapter_manifest.json") or {}
+    model_id = explicit_model or manifest.get("base_model")
+    adapter_name = explicit_adapter_name or manifest.get("adapter_name") or DEFAULT_ADAPTER_NAME
+    if not model_id:
+        raise ValueError(
+            f"Could not determine the base model for {adapter_dir}. "
+            "Pass --model or stage the adapter with bundled_adapter_manifest.json."
+        )
+    return model_id, adapter_name
+
+
+def _validate_adapter_dir(adapter_dir: Path) -> None:
+    required = (
+        "adapter_model.safetensors",
+        "adapter_config.json",
+        "bundled_adapter_manifest.json",
+    )
+    missing = [name for name in required if not (adapter_dir / name).exists()]
+    if missing:
+        joined = ", ".join(missing)
+        raise FileNotFoundError(f"Bundled adapter directory {adapter_dir} is incomplete; missing: {joined}")
 
 
 def _apply_spec_overrides(spec: ModelSpec, args: argparse.Namespace) -> ModelSpec:
@@ -936,6 +974,39 @@ def command_run_suite(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_serve_lora(args: argparse.Namespace) -> int:
+    adapter_dir = args.adapter_dir.resolve()
+    _validate_adapter_dir(adapter_dir)
+    model_id, adapter_name = _resolve_serving_metadata(adapter_dir, args.model, args.adapter_name)
+    specs = load_manifest(args.manifest)
+    spec = _apply_spec_overrides(find_model(specs, model_id), args)
+    command = _sglang_command(
+        spec,
+        host=args.host,
+        port=args.port,
+        extra_args=[
+            "--enable-lora",
+            "--lora-paths",
+            f"{adapter_name}={adapter_dir}",
+            *(args.sglang_arg or []),
+        ],
+    )
+    summary = {
+        "adapter_dir": str(adapter_dir),
+        "base_model": model_id,
+        "adapter_name": adapter_name,
+        "request_model": f"{model_id}:{adapter_name}",
+        "host": args.host,
+        "port": args.port,
+        "command": command,
+    }
+    print(json.dumps(summary, indent=2))
+    if args.dry_run:
+        return 0
+    os.execvpe(command[0], command, dict(os.environ))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="scripts/pod_eval.py",
@@ -958,6 +1029,35 @@ def build_parser() -> argparse.ArgumentParser:
     run_suite_parser = subparsers.add_parser("run-suite", help="Run all manifest models sequentially.")
     _add_eval_args(run_suite_parser)
     run_suite_parser.set_defaults(func=command_run_suite)
+
+    serve_parser = subparsers.add_parser("serve-lora", help="Serve a bundled or staged LoRA adapter over SGLang.")
+    serve_parser.add_argument("--model", help="Base model id, display name, or manifest slug. Defaults to the staged manifest.")
+    serve_parser.add_argument("--adapter-name", help="Served LoRA adapter name. Defaults to the staged manifest.")
+    serve_parser.add_argument("--adapter-dir", type=Path, default=_default_bundled_adapter_dir())
+    serve_parser.add_argument("--host", default="0.0.0.0")
+    serve_parser.add_argument("--port", type=int, default=8000)
+    serve_parser.add_argument("--dry-run", action="store_true")
+    serve_parser.add_argument(
+        "--context-length",
+        type=_positive_int,
+        help="Override manifest context length for this server.",
+    )
+    serve_parser.add_argument(
+        "--max-running-requests",
+        type=_positive_int,
+        help="Override manifest max concurrent requests for this server.",
+    )
+    serve_parser.add_argument(
+        "--mem-fraction-static",
+        type=_mem_fraction_static,
+        help="Override manifest static GPU memory fraction for this server.",
+    )
+    serve_parser.add_argument(
+        "--sglang-arg",
+        action="append",
+        help="Additional single SGLang server argument. Repeat for multiple arguments.",
+    )
+    serve_parser.set_defaults(func=command_serve_lora)
     return parser
 
 

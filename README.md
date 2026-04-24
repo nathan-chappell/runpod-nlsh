@@ -97,9 +97,9 @@ The pod eval and fine-tuning flow builds on Runpod's PyTorch base image and inst
 
 ```bash
 docker build -f Dockerfile.pod-eval \
-  -t YOUR_DOCKERHUB_USER/runpod-nlsh:0.3.0 \
+  -t YOUR_DOCKERHUB_USER/runpod-nlsh:0.4.0 \
   -t YOUR_DOCKERHUB_USER/runpod-nlsh:latest .
-docker push YOUR_DOCKERHUB_USER/runpod-nlsh:0.3.0
+docker push YOUR_DOCKERHUB_USER/runpod-nlsh:0.4.0
 docker push YOUR_DOCKERHUB_USER/runpod-nlsh:latest
 ```
 
@@ -109,13 +109,13 @@ The default base is `runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404`. To try an
 Create a Runpod pod with:
 
 - GPU: RTX 4090 or another 32 GB+ GPU
-- Image: `YOUR_DOCKERHUB_USER/runpod-nlsh:0.3.0`
+- Image: `YOUR_DOCKERHUB_USER/runpod-nlsh:0.4.0`
 - Persistent or network volume mounted at `/workspace`
 - `HF_TOKEN` set from a Runpod secret
 - Recommended volume size: at least 100 GB
 - Container disk: use 20 GB for the Runpod PyTorch base image. The model, SGLang, tmp, and cache data still live on `/workspace`, but the base image itself is large enough that 10 GB is likely too tight if Runpod counts image/root filesystem unpacking there.
 
-The container `CMD` is `["python", "scripts/runpod_bootstrap.py"]`. Heavy Python dependencies are baked into the image from `requirements/pod-core.txt`, `requirements/pod-train.txt`, and `requirements/pod-sglang.txt`, and `nlsh` itself is installed into the image Python during the build. The bootstrap stays stdlib-only, creates cache and artifact directories under `/workspace`, starts Runpod base services by default, and then execs `python -m nlsh.pod_workflow run`. Normal pod startup should not need any runtime `pip install`, and `/workspace` should only hold models, caches, checkpoints, and artifacts.
+The container `CMD` is `["python", "scripts/runpod_bootstrap.py"]`. Heavy Python dependencies are baked into the image from `requirements/pod-core.txt`, `requirements/pod-train.txt`, and `requirements/pod-sglang.txt`, and `nlsh` itself is installed into the image Python during the build. The bootstrap stays stdlib-only, creates cache and artifact directories under `/workspace`, starts Runpod base services by default, and then dispatches by `RUNPOD_BOOT_MODE`. `serve` is now the default and launches SGLang with the bundled Phi-4 LoRA adapter; `workflow` runs `python -m nlsh.pod_workflow run` for the baseline-eval -> fine-tune -> post-train-eval sequence. Normal pod startup should not need any runtime `pip install`, and `/workspace` should only hold models, caches, checkpoints, and artifacts.
 
 The Typer workflow logs the resolved configuration and execution plan, then:
 
@@ -127,13 +127,16 @@ The Typer workflow logs the resolved configuration and execution plan, then:
 
 For serious runs, the workflow now defaults to committed `train/eval/test` splits under `data/splits/v1/`: baseline eval and post-training eval use `data/splits/v1/test`, while training uses `data/splits/v1/train` plus `data/splits/v1/eval`. The canonical source dataset remains `data/samples/`.
 
-Baseline evals and training now keep incremental state on disk so a failure does not erase the run history. The workflow writes `/workspace/nlsh-artifacts/workflow_state.json`; each model eval writes `run_state.json`, `report.json`, and `eval.log`; OOM retries preserve prior attempt artifacts as `*.attempt-N.*`; and training writes `training_state.json` plus regular checkpoints under the output directory. Reports go to `/workspace/nlsh-artifacts`, the adapter goes to `/workspace/nlsh-finetune/phi-4-mini-instruct-lora`, and exit codes are recorded in `/workspace/nlsh-artifacts/last_eval_exit_code`, `/workspace/nlsh-artifacts/last_training_exit_code`, `/workspace/nlsh-artifacts/last_post_training_eval_exit_code`, and `/workspace/nlsh-artifacts/last_exit_code`. The pod bootstrap now defaults `POD_EVAL_EXIT_AFTER=1`, so a serious eval/train/eval run finishes once and exits cleanly. Set `POD_EVAL_EXIT_AFTER=0` if you want the container to stay alive for inspection and artifact exfiltration.
+Baseline evals and training now keep incremental state on disk so a failure does not erase the run history. The workflow writes `/workspace/nlsh-artifacts/workflow_state.json`; each model eval writes `run_state.json`, `report.json`, and `eval.log`; OOM retries preserve prior attempt artifacts as `*.attempt-N.*`; and training writes `training_state.json`, `trainer_state.json`, `metrics_history.json`, `metrics_history.csv`, and regular checkpoints under the output directory. Reports go to `/workspace/nlsh-artifacts`, the adapter goes to `/workspace/nlsh-finetune/phi-4-mini-instruct-lora`, and exit codes are recorded in `/workspace/nlsh-artifacts/last_eval_exit_code`, `/workspace/nlsh-artifacts/last_training_exit_code`, `/workspace/nlsh-artifacts/last_post_training_eval_exit_code`, and `/workspace/nlsh-artifacts/last_exit_code`. In workflow mode the bootstrap still defaults `POD_EVAL_EXIT_AFTER=1`, so a serious eval/train/eval run finishes once and exits cleanly. Set `POD_EVAL_EXIT_AFTER=0` if you want the container to stay alive for inspection and artifact exfiltration.
 
 The Runpod PyTorch base image may include `/start.sh` for base-image services such as SSH or notebook processes. Runpod's custom-template docs describe this as the base-service startup path, so the bootstrap runs it by default when it exists. Set `RUNPOD_START_BASE_SERVICES=0` only if you want application-only startup.
 
 Optional runtime knobs:
 
 ```bash
+RUNPOD_BOOT_MODE=serve
+RUNPOD_SERVE_HOST=0.0.0.0
+RUNPOD_SERVE_PORT=8000
 POD_EVAL_LIMIT=2
 POD_EVAL_TIMEOUT=90
 POD_EVAL_STARTUP_TIMEOUT=900
@@ -149,12 +152,22 @@ POD_EVAL_TRAIN_ARGS="--oom-retries 3"
 POD_EVAL_EXIT_AFTER=1
 ```
 
-You can also run commands manually in the pod:
+To bundle the latest exfiltrated adapter into the next image build:
+
+```bash
+python scripts/stage_serving_adapter.py \
+  --bundle-root tmp/runpod-downloads/2026-04-24/68oi72inl7zsj6-64411b67
+```
+
+The staging script copies the current LoRA adapter into `deploy/bundled-adapter/current/` and writes `bundled_adapter_manifest.json` for the serving bootstrap. The copied weight files stay git-ignored, but Docker will include them in the build context.
+
+Serve mode uses that bundled adapter and exposes the request model as `microsoft/Phi-4-mini-instruct:nlsh-phi4-ft`. You can also run commands manually in the pod:
 
 ```bash
 export HF_HOME=/workspace/hf-cache
 python scripts/pod_eval.py download-models
 python scripts/pod_eval.py run-suite --dataset data/splits/v1/test
+python scripts/pod_eval.py serve-lora --dry-run
 python -m nlsh.pod_workflow run --dry-run
 ```
 
@@ -197,7 +210,7 @@ By default the standalone training script still deterministically partitions `da
 ./.venv/bin/python scripts/materialize_dataset_splits.py
 ```
 
-The script uses regular bf16 LoRA by default, maps dataset `developer` messages to chat `system` messages, trains on prompt/completion examples, and starts with `target_modules=["qkv_proj"]`, `r=8`, `lora_alpha=16`, and `lora_dropout=0.05`. The default training schedule is now more serious: `10` epochs, `per_device_train_batch_size=4`, `per_device_eval_batch_size=4`, `gradient_accumulation_steps=4`, and `learning_rate=5e-4`, with OOM retries reducing batch sizes and sequence length if the GPU cannot hold that footprint. It defaults to `--no-trust-remote-code` for Phi-4 so it can use the native `transformers` `Phi3*` classes and avoid upstream remote-code drift. It tries FlashAttention 2 when installed and otherwise falls back to SDPA. Checkpoints go under `--output-dir/checkpoint-*`; the final PEFT adapter is saved directly in `--output-dir`.
+The script uses regular bf16 LoRA by default, maps dataset `developer` messages to chat `system` messages, trains on prompt/completion examples, and starts with `target_modules=["qkv_proj"]`, `r=8`, `lora_alpha=16`, and `lora_dropout=0.05`. The default training schedule is now more serious: `10` epochs, `per_device_train_batch_size=4`, `per_device_eval_batch_size=4`, `gradient_accumulation_steps=4`, and `learning_rate=5e-4`, with OOM retries reducing batch sizes and sequence length if the GPU cannot hold that footprint. It defaults to `--no-trust-remote-code` for Phi-4 so it can use the native `transformers` `Phi3*` classes and avoid upstream remote-code drift. It tries FlashAttention 2 when installed and otherwise falls back to SDPA. Checkpoints go under `--output-dir/checkpoint-*`; the final PEFT adapter is saved directly in `--output-dir`. Training also emits normalized `metrics_history.json` and `metrics_history.csv`, while the exfil skill renders `training-metrics.svg` from those artifacts.
 
 The next pod startup uses this script directly, not Axolotl. Set `POD_EVAL_RUN_TRAINING=0` if you only want baseline evals, or set `POD_EVAL_TRAIN_ARGS` to pass extra arguments such as `--max-steps 100` for a short smoke run.
 

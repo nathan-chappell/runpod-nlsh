@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -52,6 +53,10 @@ def _workflow_environment() -> dict[str, str]:
     return env
 
 
+def _boot_mode() -> str:
+    return os.environ.get("RUNPOD_BOOT_MODE", "serve").strip().lower()
+
+
 def _start_runpod_services() -> None:
     should_start = _env_bool(
         "RUNPOD_START_BASE_SERVICES",
@@ -83,6 +88,32 @@ def _workflow_command(*, dry_run: bool) -> list[str]:
     return command
 
 
+def _serve_command() -> list[str]:
+    bundled_adapter_dir = APP_DIR / "bundled-adapter" / "current"
+    command = [
+        sys.executable,
+        "scripts/pod_eval.py",
+        "--manifest",
+        str(APP_DIR / "configs/pod_eval_models.json"),
+        "serve-lora",
+        "--adapter-dir",
+        str(bundled_adapter_dir),
+        "--host",
+        os.environ.get("RUNPOD_SERVE_HOST", "0.0.0.0"),
+        "--port",
+        os.environ.get("RUNPOD_SERVE_PORT", "8000"),
+    ]
+    model_id = os.environ.get("RUNPOD_SERVE_MODEL_ID")
+    adapter_name = os.environ.get("RUNPOD_SERVE_ADAPTER_NAME")
+    if model_id:
+        command.extend(["--model", model_id])
+    if adapter_name:
+        command.extend(["--adapter-name", adapter_name])
+    for arg in shlex.split(os.environ.get("RUNPOD_SERVE_SGLANG_ARGS", "")):
+        command.append(f"--sglang-arg={arg}")
+    return command
+
+
 def main() -> int:
     _ensure_workspace()
     _log("nlsh Runpod bootstrap starting")
@@ -90,9 +121,17 @@ def main() -> int:
     _log(f"workspace_dir={WORKSPACE_DIR}")
     _log(f"artifact_dir={ARTIFACT_DIR}")
     _start_runpod_services()
-    command = _workflow_command(dry_run=_env_bool("POD_EVAL_DRY_RUN", False))
-    env = _workflow_environment()
-    _log("handoff to Typer workflow")
+    mode = _boot_mode()
+    if mode == "workflow":
+        command = _workflow_command(dry_run=_env_bool("POD_EVAL_DRY_RUN", False))
+        env = _workflow_environment()
+    elif mode == "serve":
+        command = _serve_command()
+        env = dict(os.environ)
+    else:
+        raise SystemExit(f"Unsupported RUNPOD_BOOT_MODE={mode!r}; expected 'serve' or 'workflow'")
+    _log(f"boot_mode={mode}")
+    _log("handoff to runtime command")
     _log("+ " + " ".join(command))
     os.chdir(APP_DIR)
     os.execvpe(command[0], command, env)
