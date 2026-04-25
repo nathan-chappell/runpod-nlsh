@@ -1,0 +1,14 @@
+[
+  {
+    "invoice_id": "INV-2",
+    "total": 99.5
+  },
+  {
+    "invoice_id": "INV-3",
+    "total": 48.2
+  },
+  {
+    "invoice_id": "INV-1",
+    "total": 15
+  }
+]

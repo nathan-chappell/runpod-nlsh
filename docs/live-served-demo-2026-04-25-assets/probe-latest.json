@@ -1,0 +1,508 @@
+{
+  "summary": {
+    "dataset": "/home/uphill/programming/py/oss-testing/data/samples",
+    "mode": "runtime",
+    "seed": 532910671,
+    "count": 10,
+    "exact_matches": 8,
+    "exact_match_rate": 0.8,
+    "plan_outputs": 10,
+    "clarification_outputs": 0,
+    "compile_valid_plan_outputs": 10,
+    "compile_valid_plan_rate": 1.0,
+    "transport_or_parse_failures": 0,
+    "model": "microsoft/Phi-4-mini-instruct:nlsh-phi4-ft",
+    "base_url": "https://u4e8stvpi9nd6a-8000.proxy.runpod.net/v1",
+    "proxy_url": "https://u4e8stvpi9nd6a-8000.proxy.runpod.net",
+    "pod_id": null
+  },
+  "results": [
+    {
+      "bucket": "clarification",
+      "source_path": "/home/uphill/programming/py/oss-testing/data/samples/clarifications/pdf_merge.jsonl",
+      "source_line": 12,
+      "focus": "missing signed merge files",
+      "prompt": "merge the signed PDFs into signed_packet.pdf",
+      "sent_messages": [
+        {
+          "role": "system",
+          "content": "You translate user requests into PlanV1 JSON for a small file/PDF/JSON shell assistant.\n\nRules:\n- Return valid JSON only. Return exactly one JSON object and nothing else.\n- Return either {\"kind\":\"plan\",\"steps\":[...]} or {\"kind\":\"clarification\",\"question\":\"...\"}.\n- If any required executable value is missing, return a clarification instead of a partial step.\n- Allowed plan shapes only:\n  1. one executable step\n  2. find_files first, then exactly one consuming step\n  3. csv_to_json first, then exactly one JSON step\n- Never use more than 2 steps.\n- Never add helper steps that the user did not ask for.\n- Every step object must include a \"kind\" field.\n- Never emit shell commands, jq code, regexes, markdown, or prose.\n- Do not invent filenames, directories, output names, fields, page ranges, search text, or filter values.\n- Omit pipeline handoff fields instead of setting them to null.\n- Never use csv_to_json for a .json input.\n- Never use the output filename as an input filename.\n- Supported step kinds are: find_files, pdf_merge, pdf_extract_pages, pdf_search_text, csv_to_json, json_filter, json_select_fields, json_sort, json_group_count.\n- Use find_files with root, glob, and optional max_depth.\n- For \"under ./dir\" or \"in ./dir\", put that path in root.\n- For \"every PDF\", use glob=\"*.pdf\"; for CSV files, use glob=\"*.csv\"; for JSON files, use glob=\"*.json\".\n- For cues like \"signed pdfs\" or \"june csv\", combine the cue and extension in glob, such as \"*signed*.pdf\" or \"*june*.csv\".\n- For \"no deeper than two levels\", set max_depth to 2.\n- Use pdf_merge for combining PDFs.\n- Use pdf_extract_pages for extracting an inclusive page range from one PDF.\n- For \"extract page N\", set both page_start and page_end to N.\n- Use pdf_search_text for text search across one or more PDFs; its output must be JSON.\n- Use json_filter for one-field comparisons with operator eq, ne, gt, gte, lt, lte, or contains.\n- Use json_select_fields for keeping named fields.\n- Use json_sort for sorting by one field.\n- Use json_group_count for counting rows grouped by one or more fields.\n\nExamples:\nUser: extract pages from manual.pdf into manual_excerpt.pdf\nAssistant: {\"kind\":\"clarification\",\"question\":\"Which page range should I extract from manual.pdf?\"}\n\nUser: convert shipments.csv to shipments.json\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"csv_to_json\",\"input_file\":\"shipments.csv\",\"output_file\":\"shipments.json\"}]}\n\nUser: merge every PDF under ./contracts into signed_bundle.pdf\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"find_files\",\"root\":\"./contracts\",\"glob\":\"*.pdf\"},{\"kind\":\"pdf_merge\",\"output_file\":\"signed_bundle.pdf\"}]}\n\nUser: convert customers.csv to JSON and keep only name and email in contacts.json\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"csv_to_json\",\"input_file\":\"customers.csv\"},{\"kind\":\"json_select_fields\",\"fields\":[\"name\",\"email\"],\"output_file\":\"contacts.json\"}]}"
+        },
+        {
+          "role": "user",
+          "content": "merge the signed PDFs into signed_packet.pdf"
+        }
+      ],
+      "expected_assistant": "{\"kind\":\"clarification\",\"question\":\"Which PDF files should I merge into signed_packet.pdf?\"}",
+      "expected_normalized": {
+        "kind": "clarification",
+        "question": "Which PDF files should I merge into signed_packet.pdf?"
+      },
+      "actual_assistant": "{\"kind\":\"plan\",\"steps\":[{\"kind\":\"find_files\",\"root\":\"\",\"glob\":\"*signed*.pdf\"},{\"kind\":\"pdf_merge\",\"output_file\":\"signed_packet.pdf\"}]}",
+      "actual_normalized": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "find_files",
+            "root": "",
+            "glob": "*signed*.pdf"
+          },
+          {
+            "kind": "pdf_merge",
+            "output_file": "signed_packet.pdf"
+          }
+        ]
+      },
+      "exact_match": false,
+      "compile_valid": true,
+      "compile_error": null,
+      "parse_or_transport_error": null,
+      "output_kind": "plan"
+    },
+    {
+      "bucket": "csv_to_json",
+      "source_path": "/home/uphill/programming/py/oss-testing/data/samples/plans/csv_to_json.jsonl",
+      "source_line": 10,
+      "focus": "csv convert commissions file",
+      "prompt": "convert commissions.csv to commissions.json",
+      "sent_messages": [
+        {
+          "role": "system",
+          "content": "You translate user requests into PlanV1 JSON for a small file/PDF/JSON shell assistant.\n\nRules:\n- Return valid JSON only. Return exactly one JSON object and nothing else.\n- Return either {\"kind\":\"plan\",\"steps\":[...]} or {\"kind\":\"clarification\",\"question\":\"...\"}.\n- If any required executable value is missing, return a clarification instead of a partial step.\n- Allowed plan shapes only:\n  1. one executable step\n  2. find_files first, then exactly one consuming step\n  3. csv_to_json first, then exactly one JSON step\n- Never use more than 2 steps.\n- Never add helper steps that the user did not ask for.\n- Every step object must include a \"kind\" field.\n- Never emit shell commands, jq code, regexes, markdown, or prose.\n- Do not invent filenames, directories, output names, fields, page ranges, search text, or filter values.\n- Omit pipeline handoff fields instead of setting them to null.\n- Never use csv_to_json for a .json input.\n- Never use the output filename as an input filename.\n- Supported step kinds are: find_files, pdf_merge, pdf_extract_pages, pdf_search_text, csv_to_json, json_filter, json_select_fields, json_sort, json_group_count.\n- Use find_files with root, glob, and optional max_depth.\n- For \"under ./dir\" or \"in ./dir\", put that path in root.\n- For \"every PDF\", use glob=\"*.pdf\"; for CSV files, use glob=\"*.csv\"; for JSON files, use glob=\"*.json\".\n- For cues like \"signed pdfs\" or \"june csv\", combine the cue and extension in glob, such as \"*signed*.pdf\" or \"*june*.csv\".\n- For \"no deeper than two levels\", set max_depth to 2.\n- Use pdf_merge for combining PDFs.\n- Use pdf_extract_pages for extracting an inclusive page range from one PDF.\n- For \"extract page N\", set both page_start and page_end to N.\n- Use pdf_search_text for text search across one or more PDFs; its output must be JSON.\n- Use json_filter for one-field comparisons with operator eq, ne, gt, gte, lt, lte, or contains.\n- Use json_select_fields for keeping named fields.\n- Use json_sort for sorting by one field.\n- Use json_group_count for counting rows grouped by one or more fields.\n\nExamples:\nUser: extract pages from manual.pdf into manual_excerpt.pdf\nAssistant: {\"kind\":\"clarification\",\"question\":\"Which page range should I extract from manual.pdf?\"}\n\nUser: convert shipments.csv to shipments.json\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"csv_to_json\",\"input_file\":\"shipments.csv\",\"output_file\":\"shipments.json\"}]}\n\nUser: merge every PDF under ./contracts into signed_bundle.pdf\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"find_files\",\"root\":\"./contracts\",\"glob\":\"*.pdf\"},{\"kind\":\"pdf_merge\",\"output_file\":\"signed_bundle.pdf\"}]}\n\nUser: convert customers.csv to JSON and keep only name and email in contacts.json\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"csv_to_json\",\"input_file\":\"customers.csv\"},{\"kind\":\"json_select_fields\",\"fields\":[\"name\",\"email\"],\"output_file\":\"contacts.json\"}]}"
+        },
+        {
+          "role": "user",
+          "content": "convert commissions.csv to commissions.json"
+        }
+      ],
+      "expected_assistant": "{\"kind\":\"plan\",\"steps\":[{\"kind\":\"csv_to_json\",\"input_file\":\"commissions.csv\",\"output_file\":\"commissions.json\"}]}",
+      "expected_normalized": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "csv_to_json",
+            "input_file": "commissions.csv",
+            "output_file": "commissions.json"
+          }
+        ]
+      },
+      "actual_assistant": "{\"kind\":\"plan\",\"steps\":[{\"kind\":\"csv_to_json\",\"input_file\":\"commissions.csv\",\"output_file\":\"commissions.json\"}]}",
+      "actual_normalized": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "csv_to_json",
+            "input_file": "commissions.csv",
+            "output_file": "commissions.json"
+          }
+        ]
+      },
+      "exact_match": true,
+      "compile_valid": true,
+      "compile_error": null,
+      "parse_or_transport_error": null,
+      "output_kind": "plan"
+    },
+    {
+      "bucket": "find_files",
+      "source_path": "/home/uphill/programming/py/oss-testing/data/samples/plans/find_files.jsonl",
+      "source_line": 8,
+      "focus": "find executed pdf cue",
+      "prompt": "find every PDF under ./board with executed in the path",
+      "sent_messages": [
+        {
+          "role": "system",
+          "content": "You translate user requests into PlanV1 JSON for a small file/PDF/JSON shell assistant.\n\nRules:\n- Return valid JSON only. Return exactly one JSON object and nothing else.\n- Return either {\"kind\":\"plan\",\"steps\":[...]} or {\"kind\":\"clarification\",\"question\":\"...\"}.\n- If any required executable value is missing, return a clarification instead of a partial step.\n- Allowed plan shapes only:\n  1. one executable step\n  2. find_files first, then exactly one consuming step\n  3. csv_to_json first, then exactly one JSON step\n- Never use more than 2 steps.\n- Never add helper steps that the user did not ask for.\n- Every step object must include a \"kind\" field.\n- Never emit shell commands, jq code, regexes, markdown, or prose.\n- Do not invent filenames, directories, output names, fields, page ranges, search text, or filter values.\n- Omit pipeline handoff fields instead of setting them to null.\n- Never use csv_to_json for a .json input.\n- Never use the output filename as an input filename.\n- Supported step kinds are: find_files, pdf_merge, pdf_extract_pages, pdf_search_text, csv_to_json, json_filter, json_select_fields, json_sort, json_group_count.\n- Use find_files with root, glob, and optional max_depth.\n- For \"under ./dir\" or \"in ./dir\", put that path in root.\n- For \"every PDF\", use glob=\"*.pdf\"; for CSV files, use glob=\"*.csv\"; for JSON files, use glob=\"*.json\".\n- For cues like \"signed pdfs\" or \"june csv\", combine the cue and extension in glob, such as \"*signed*.pdf\" or \"*june*.csv\".\n- For \"no deeper than two levels\", set max_depth to 2.\n- Use pdf_merge for combining PDFs.\n- Use pdf_extract_pages for extracting an inclusive page range from one PDF.\n- For \"extract page N\", set both page_start and page_end to N.\n- Use pdf_search_text for text search across one or more PDFs; its output must be JSON.\n- Use json_filter for one-field comparisons with operator eq, ne, gt, gte, lt, lte, or contains.\n- Use json_select_fields for keeping named fields.\n- Use json_sort for sorting by one field.\n- Use json_group_count for counting rows grouped by one or more fields.\n\nExamples:\nUser: extract pages from manual.pdf into manual_excerpt.pdf\nAssistant: {\"kind\":\"clarification\",\"question\":\"Which page range should I extract from manual.pdf?\"}\n\nUser: convert shipments.csv to shipments.json\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"csv_to_json\",\"input_file\":\"shipments.csv\",\"output_file\":\"shipments.json\"}]}\n\nUser: merge every PDF under ./contracts into signed_bundle.pdf\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"find_files\",\"root\":\"./contracts\",\"glob\":\"*.pdf\"},{\"kind\":\"pdf_merge\",\"output_file\":\"signed_bundle.pdf\"}]}\n\nUser: convert customers.csv to JSON and keep only name and email in contacts.json\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"csv_to_json\",\"input_file\":\"customers.csv\"},{\"kind\":\"json_select_fields\",\"fields\":[\"name\",\"email\"],\"output_file\":\"contacts.json\"}]}"
+        },
+        {
+          "role": "user",
+          "content": "find every PDF under ./board with executed in the path"
+        }
+      ],
+      "expected_assistant": "{\"kind\":\"plan\",\"steps\":[{\"kind\":\"find_files\",\"root\":\"./board\",\"glob\":\"*executed*.pdf\",\"max_depth\":null}]}",
+      "expected_normalized": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "find_files",
+            "root": "./board",
+            "glob": "*executed*.pdf"
+          }
+        ]
+      },
+      "actual_assistant": "{\"kind\":\"plan\",\"steps\":[{\"kind\":\"find_files\",\"root\":\"./board\",\"glob\":\"*executed*.pdf\",\"max_depth\":2}]}",
+      "actual_normalized": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "find_files",
+            "root": "./board",
+            "glob": "*executed*.pdf",
+            "max_depth": 2
+          }
+        ]
+      },
+      "exact_match": false,
+      "compile_valid": true,
+      "compile_error": null,
+      "parse_or_transport_error": null,
+      "output_kind": "plan"
+    },
+    {
+      "bucket": "json_filter",
+      "source_path": "/home/uphill/programming/py/oss-testing/data/samples/plans/json_filter.jsonl",
+      "source_line": 7,
+      "focus": "json filter payment threshold",
+      "prompt": "from payments.json keep rows where amount is greater than or equal to 500 into large_payments.json",
+      "sent_messages": [
+        {
+          "role": "system",
+          "content": "You translate user requests into PlanV1 JSON for a small file/PDF/JSON shell assistant.\n\nRules:\n- Return valid JSON only. Return exactly one JSON object and nothing else.\n- Return either {\"kind\":\"plan\",\"steps\":[...]} or {\"kind\":\"clarification\",\"question\":\"...\"}.\n- If any required executable value is missing, return a clarification instead of a partial step.\n- Allowed plan shapes only:\n  1. one executable step\n  2. find_files first, then exactly one consuming step\n  3. csv_to_json first, then exactly one JSON step\n- Never use more than 2 steps.\n- Never add helper steps that the user did not ask for.\n- Every step object must include a \"kind\" field.\n- Never emit shell commands, jq code, regexes, markdown, or prose.\n- Do not invent filenames, directories, output names, fields, page ranges, search text, or filter values.\n- Omit pipeline handoff fields instead of setting them to null.\n- Never use csv_to_json for a .json input.\n- Never use the output filename as an input filename.\n- Supported step kinds are: find_files, pdf_merge, pdf_extract_pages, pdf_search_text, csv_to_json, json_filter, json_select_fields, json_sort, json_group_count.\n- Use find_files with root, glob, and optional max_depth.\n- For \"under ./dir\" or \"in ./dir\", put that path in root.\n- For \"every PDF\", use glob=\"*.pdf\"; for CSV files, use glob=\"*.csv\"; for JSON files, use glob=\"*.json\".\n- For cues like \"signed pdfs\" or \"june csv\", combine the cue and extension in glob, such as \"*signed*.pdf\" or \"*june*.csv\".\n- For \"no deeper than two levels\", set max_depth to 2.\n- Use pdf_merge for combining PDFs.\n- Use pdf_extract_pages for extracting an inclusive page range from one PDF.\n- For \"extract page N\", set both page_start and page_end to N.\n- Use pdf_search_text for text search across one or more PDFs; its output must be JSON.\n- Use json_filter for one-field comparisons with operator eq, ne, gt, gte, lt, lte, or contains.\n- Use json_select_fields for keeping named fields.\n- Use json_sort for sorting by one field.\n- Use json_group_count for counting rows grouped by one or more fields.\n\nExamples:\nUser: extract pages from manual.pdf into manual_excerpt.pdf\nAssistant: {\"kind\":\"clarification\",\"question\":\"Which page range should I extract from manual.pdf?\"}\n\nUser: convert shipments.csv to shipments.json\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"csv_to_json\",\"input_file\":\"shipments.csv\",\"output_file\":\"shipments.json\"}]}\n\nUser: merge every PDF under ./contracts into signed_bundle.pdf\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"find_files\",\"root\":\"./contracts\",\"glob\":\"*.pdf\"},{\"kind\":\"pdf_merge\",\"output_file\":\"signed_bundle.pdf\"}]}\n\nUser: convert customers.csv to JSON and keep only name and email in contacts.json\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"csv_to_json\",\"input_file\":\"customers.csv\"},{\"kind\":\"json_select_fields\",\"fields\":[\"name\",\"email\"],\"output_file\":\"contacts.json\"}]}"
+        },
+        {
+          "role": "user",
+          "content": "from payments.json keep rows where amount is greater than or equal to 500 into large_payments.json"
+        }
+      ],
+      "expected_assistant": "{\"kind\":\"plan\",\"steps\":[{\"kind\":\"json_filter\",\"input_file\":\"payments.json\",\"field\":\"amount\",\"operator\":\"gte\",\"value\":500,\"output_file\":\"large_payments.json\"}]}",
+      "expected_normalized": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "json_filter",
+            "input_file": "payments.json",
+            "field": "amount",
+            "operator": "gte",
+            "value": 500,
+            "output_file": "large_payments.json"
+          }
+        ]
+      },
+      "actual_assistant": "{\"kind\":\"plan\",\"steps\":[{\"kind\":\"json_filter\",\"input_file\":\"payments.json\",\"field\":\"amount\",\"operator\":\"gte\",\"value\":500,\"output_file\":\"large_payments.json\"}]}",
+      "actual_normalized": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "json_filter",
+            "input_file": "payments.json",
+            "field": "amount",
+            "operator": "gte",
+            "value": 500,
+            "output_file": "large_payments.json"
+          }
+        ]
+      },
+      "exact_match": true,
+      "compile_valid": true,
+      "compile_error": null,
+      "parse_or_transport_error": null,
+      "output_kind": "plan"
+    },
+    {
+      "bucket": "json_group_count",
+      "source_path": "/home/uphill/programming/py/oss-testing/data/samples/plans/json_group_count.jsonl",
+      "source_line": 4,
+      "focus": "json group custom count",
+      "prompt": "count sessions.json rows per country into sessions_by_country.json using total as the count field",
+      "sent_messages": [
+        {
+          "role": "system",
+          "content": "You translate user requests into PlanV1 JSON for a small file/PDF/JSON shell assistant.\n\nRules:\n- Return valid JSON only. Return exactly one JSON object and nothing else.\n- Return either {\"kind\":\"plan\",\"steps\":[...]} or {\"kind\":\"clarification\",\"question\":\"...\"}.\n- If any required executable value is missing, return a clarification instead of a partial step.\n- Allowed plan shapes only:\n  1. one executable step\n  2. find_files first, then exactly one consuming step\n  3. csv_to_json first, then exactly one JSON step\n- Never use more than 2 steps.\n- Never add helper steps that the user did not ask for.\n- Every step object must include a \"kind\" field.\n- Never emit shell commands, jq code, regexes, markdown, or prose.\n- Do not invent filenames, directories, output names, fields, page ranges, search text, or filter values.\n- Omit pipeline handoff fields instead of setting them to null.\n- Never use csv_to_json for a .json input.\n- Never use the output filename as an input filename.\n- Supported step kinds are: find_files, pdf_merge, pdf_extract_pages, pdf_search_text, csv_to_json, json_filter, json_select_fields, json_sort, json_group_count.\n- Use find_files with root, glob, and optional max_depth.\n- For \"under ./dir\" or \"in ./dir\", put that path in root.\n- For \"every PDF\", use glob=\"*.pdf\"; for CSV files, use glob=\"*.csv\"; for JSON files, use glob=\"*.json\".\n- For cues like \"signed pdfs\" or \"june csv\", combine the cue and extension in glob, such as \"*signed*.pdf\" or \"*june*.csv\".\n- For \"no deeper than two levels\", set max_depth to 2.\n- Use pdf_merge for combining PDFs.\n- Use pdf_extract_pages for extracting an inclusive page range from one PDF.\n- For \"extract page N\", set both page_start and page_end to N.\n- Use pdf_search_text for text search across one or more PDFs; its output must be JSON.\n- Use json_filter for one-field comparisons with operator eq, ne, gt, gte, lt, lte, or contains.\n- Use json_select_fields for keeping named fields.\n- Use json_sort for sorting by one field.\n- Use json_group_count for counting rows grouped by one or more fields.\n\nExamples:\nUser: extract pages from manual.pdf into manual_excerpt.pdf\nAssistant: {\"kind\":\"clarification\",\"question\":\"Which page range should I extract from manual.pdf?\"}\n\nUser: convert shipments.csv to shipments.json\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"csv_to_json\",\"input_file\":\"shipments.csv\",\"output_file\":\"shipments.json\"}]}\n\nUser: merge every PDF under ./contracts into signed_bundle.pdf\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"find_files\",\"root\":\"./contracts\",\"glob\":\"*.pdf\"},{\"kind\":\"pdf_merge\",\"output_file\":\"signed_bundle.pdf\"}]}\n\nUser: convert customers.csv to JSON and keep only name and email in contacts.json\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"csv_to_json\",\"input_file\":\"customers.csv\"},{\"kind\":\"json_select_fields\",\"fields\":[\"name\",\"email\"],\"output_file\":\"contacts.json\"}]}"
+        },
+        {
+          "role": "user",
+          "content": "count sessions.json rows per country into sessions_by_country.json using total as the count field"
+        }
+      ],
+      "expected_assistant": "{\"kind\":\"plan\",\"steps\":[{\"kind\":\"json_group_count\",\"input_file\":\"sessions.json\",\"group_by\":[\"country\"],\"output_file\":\"sessions_by_country.json\",\"count_field\":\"total\"}]}",
+      "expected_normalized": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "json_group_count",
+            "input_file": "sessions.json",
+            "group_by": [
+              "country"
+            ],
+            "output_file": "sessions_by_country.json",
+            "count_field": "total"
+          }
+        ]
+      },
+      "actual_assistant": "{\"kind\":\"plan\",\"steps\":[{\"kind\":\"json_group_count\",\"input_file\":\"sessions.json\",\"group_by\":[\"country\"],\"output_file\":\"sessions_by_country.json\",\"count_field\":\"total\"}]}",
+      "actual_normalized": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "json_group_count",
+            "input_file": "sessions.json",
+            "group_by": [
+              "country"
+            ],
+            "output_file": "sessions_by_country.json",
+            "count_field": "total"
+          }
+        ]
+      },
+      "exact_match": true,
+      "compile_valid": true,
+      "compile_error": null,
+      "parse_or_transport_error": null,
+      "output_kind": "plan"
+    },
+    {
+      "bucket": "json_select_fields",
+      "source_path": "/home/uphill/programming/py/oss-testing/data/samples/plans/json_select_fields.jsonl",
+      "source_line": 2,
+      "focus": "json select invoice summary",
+      "prompt": "from invoices.json keep only invoice_id amount and due_date into invoice_summary.json",
+      "sent_messages": [
+        {
+          "role": "system",
+          "content": "You translate user requests into PlanV1 JSON for a small file/PDF/JSON shell assistant.\n\nRules:\n- Return valid JSON only. Return exactly one JSON object and nothing else.\n- Return either {\"kind\":\"plan\",\"steps\":[...]} or {\"kind\":\"clarification\",\"question\":\"...\"}.\n- If any required executable value is missing, return a clarification instead of a partial step.\n- Allowed plan shapes only:\n  1. one executable step\n  2. find_files first, then exactly one consuming step\n  3. csv_to_json first, then exactly one JSON step\n- Never use more than 2 steps.\n- Never add helper steps that the user did not ask for.\n- Every step object must include a \"kind\" field.\n- Never emit shell commands, jq code, regexes, markdown, or prose.\n- Do not invent filenames, directories, output names, fields, page ranges, search text, or filter values.\n- Omit pipeline handoff fields instead of setting them to null.\n- Never use csv_to_json for a .json input.\n- Never use the output filename as an input filename.\n- Supported step kinds are: find_files, pdf_merge, pdf_extract_pages, pdf_search_text, csv_to_json, json_filter, json_select_fields, json_sort, json_group_count.\n- Use find_files with root, glob, and optional max_depth.\n- For \"under ./dir\" or \"in ./dir\", put that path in root.\n- For \"every PDF\", use glob=\"*.pdf\"; for CSV files, use glob=\"*.csv\"; for JSON files, use glob=\"*.json\".\n- For cues like \"signed pdfs\" or \"june csv\", combine the cue and extension in glob, such as \"*signed*.pdf\" or \"*june*.csv\".\n- For \"no deeper than two levels\", set max_depth to 2.\n- Use pdf_merge for combining PDFs.\n- Use pdf_extract_pages for extracting an inclusive page range from one PDF.\n- For \"extract page N\", set both page_start and page_end to N.\n- Use pdf_search_text for text search across one or more PDFs; its output must be JSON.\n- Use json_filter for one-field comparisons with operator eq, ne, gt, gte, lt, lte, or contains.\n- Use json_select_fields for keeping named fields.\n- Use json_sort for sorting by one field.\n- Use json_group_count for counting rows grouped by one or more fields.\n\nExamples:\nUser: extract pages from manual.pdf into manual_excerpt.pdf\nAssistant: {\"kind\":\"clarification\",\"question\":\"Which page range should I extract from manual.pdf?\"}\n\nUser: convert shipments.csv to shipments.json\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"csv_to_json\",\"input_file\":\"shipments.csv\",\"output_file\":\"shipments.json\"}]}\n\nUser: merge every PDF under ./contracts into signed_bundle.pdf\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"find_files\",\"root\":\"./contracts\",\"glob\":\"*.pdf\"},{\"kind\":\"pdf_merge\",\"output_file\":\"signed_bundle.pdf\"}]}\n\nUser: convert customers.csv to JSON and keep only name and email in contacts.json\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"csv_to_json\",\"input_file\":\"customers.csv\"},{\"kind\":\"json_select_fields\",\"fields\":[\"name\",\"email\"],\"output_file\":\"contacts.json\"}]}"
+        },
+        {
+          "role": "user",
+          "content": "from invoices.json keep only invoice_id amount and due_date into invoice_summary.json"
+        }
+      ],
+      "expected_assistant": "{\"kind\":\"plan\",\"steps\":[{\"kind\":\"json_select_fields\",\"input_file\":\"invoices.json\",\"fields\":[\"invoice_id\",\"amount\",\"due_date\"],\"output_file\":\"invoice_summary.json\"}]}",
+      "expected_normalized": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "json_select_fields",
+            "input_file": "invoices.json",
+            "fields": [
+              "invoice_id",
+              "amount",
+              "due_date"
+            ],
+            "output_file": "invoice_summary.json"
+          }
+        ]
+      },
+      "actual_assistant": "{\"kind\":\"plan\",\"steps\":[{\"kind\":\"json_select_fields\",\"input_file\":\"invoices.json\",\"fields\":[\"invoice_id\",\"amount\",\"due_date\"],\"output_file\":\"invoice_summary.json\"}]}",
+      "actual_normalized": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "json_select_fields",
+            "input_file": "invoices.json",
+            "fields": [
+              "invoice_id",
+              "amount",
+              "due_date"
+            ],
+            "output_file": "invoice_summary.json"
+          }
+        ]
+      },
+      "exact_match": true,
+      "compile_valid": true,
+      "compile_error": null,
+      "parse_or_transport_error": null,
+      "output_kind": "plan"
+    },
+    {
+      "bucket": "json_sort",
+      "source_path": "/home/uphill/programming/py/oss-testing/data/samples/plans/json_sort.jsonl",
+      "source_line": 7,
+      "focus": "json sort renewal ascending",
+      "prompt": "sort subscriptions.json by renewal_date into subscriptions_by_renewal.json",
+      "sent_messages": [
+        {
+          "role": "system",
+          "content": "You translate user requests into PlanV1 JSON for a small file/PDF/JSON shell assistant.\n\nRules:\n- Return valid JSON only. Return exactly one JSON object and nothing else.\n- Return either {\"kind\":\"plan\",\"steps\":[...]} or {\"kind\":\"clarification\",\"question\":\"...\"}.\n- If any required executable value is missing, return a clarification instead of a partial step.\n- Allowed plan shapes only:\n  1. one executable step\n  2. find_files first, then exactly one consuming step\n  3. csv_to_json first, then exactly one JSON step\n- Never use more than 2 steps.\n- Never add helper steps that the user did not ask for.\n- Every step object must include a \"kind\" field.\n- Never emit shell commands, jq code, regexes, markdown, or prose.\n- Do not invent filenames, directories, output names, fields, page ranges, search text, or filter values.\n- Omit pipeline handoff fields instead of setting them to null.\n- Never use csv_to_json for a .json input.\n- Never use the output filename as an input filename.\n- Supported step kinds are: find_files, pdf_merge, pdf_extract_pages, pdf_search_text, csv_to_json, json_filter, json_select_fields, json_sort, json_group_count.\n- Use find_files with root, glob, and optional max_depth.\n- For \"under ./dir\" or \"in ./dir\", put that path in root.\n- For \"every PDF\", use glob=\"*.pdf\"; for CSV files, use glob=\"*.csv\"; for JSON files, use glob=\"*.json\".\n- For cues like \"signed pdfs\" or \"june csv\", combine the cue and extension in glob, such as \"*signed*.pdf\" or \"*june*.csv\".\n- For \"no deeper than two levels\", set max_depth to 2.\n- Use pdf_merge for combining PDFs.\n- Use pdf_extract_pages for extracting an inclusive page range from one PDF.\n- For \"extract page N\", set both page_start and page_end to N.\n- Use pdf_search_text for text search across one or more PDFs; its output must be JSON.\n- Use json_filter for one-field comparisons with operator eq, ne, gt, gte, lt, lte, or contains.\n- Use json_select_fields for keeping named fields.\n- Use json_sort for sorting by one field.\n- Use json_group_count for counting rows grouped by one or more fields.\n\nExamples:\nUser: extract pages from manual.pdf into manual_excerpt.pdf\nAssistant: {\"kind\":\"clarification\",\"question\":\"Which page range should I extract from manual.pdf?\"}\n\nUser: convert shipments.csv to shipments.json\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"csv_to_json\",\"input_file\":\"shipments.csv\",\"output_file\":\"shipments.json\"}]}\n\nUser: merge every PDF under ./contracts into signed_bundle.pdf\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"find_files\",\"root\":\"./contracts\",\"glob\":\"*.pdf\"},{\"kind\":\"pdf_merge\",\"output_file\":\"signed_bundle.pdf\"}]}\n\nUser: convert customers.csv to JSON and keep only name and email in contacts.json\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"csv_to_json\",\"input_file\":\"customers.csv\"},{\"kind\":\"json_select_fields\",\"fields\":[\"name\",\"email\"],\"output_file\":\"contacts.json\"}]}"
+        },
+        {
+          "role": "user",
+          "content": "sort subscriptions.json by renewal_date into subscriptions_by_renewal.json"
+        }
+      ],
+      "expected_assistant": "{\"kind\":\"plan\",\"steps\":[{\"kind\":\"json_sort\",\"input_file\":\"subscriptions.json\",\"field\":\"renewal_date\",\"descending\":false,\"output_file\":\"subscriptions_by_renewal.json\"}]}",
+      "expected_normalized": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "json_sort",
+            "input_file": "subscriptions.json",
+            "field": "renewal_date",
+            "descending": false,
+            "output_file": "subscriptions_by_renewal.json"
+          }
+        ]
+      },
+      "actual_assistant": "{\"kind\":\"plan\",\"steps\":[{\"kind\":\"json_sort\",\"input_file\":\"subscriptions.json\",\"field\":\"renewal_date\",\"output_file\":\"subscriptions_by_renewal.json\"}]}",
+      "actual_normalized": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "json_sort",
+            "input_file": "subscriptions.json",
+            "field": "renewal_date",
+            "descending": false,
+            "output_file": "subscriptions_by_renewal.json"
+          }
+        ]
+      },
+      "exact_match": true,
+      "compile_valid": true,
+      "compile_error": null,
+      "parse_or_transport_error": null,
+      "output_kind": "plan"
+    },
+    {
+      "bucket": "pdf_extract_pages",
+      "source_path": "/home/uphill/programming/py/oss-testing/data/samples/plans/pdf_extract_pages.jsonl",
+      "source_line": 8,
+      "focus": "pdf extract compliance range",
+      "prompt": "extract pages 14 through 16 from compliance_manual.pdf into compliance_section.pdf",
+      "sent_messages": [
+        {
+          "role": "system",
+          "content": "You translate user requests into PlanV1 JSON for a small file/PDF/JSON shell assistant.\n\nRules:\n- Return valid JSON only. Return exactly one JSON object and nothing else.\n- Return either {\"kind\":\"plan\",\"steps\":[...]} or {\"kind\":\"clarification\",\"question\":\"...\"}.\n- If any required executable value is missing, return a clarification instead of a partial step.\n- Allowed plan shapes only:\n  1. one executable step\n  2. find_files first, then exactly one consuming step\n  3. csv_to_json first, then exactly one JSON step\n- Never use more than 2 steps.\n- Never add helper steps that the user did not ask for.\n- Every step object must include a \"kind\" field.\n- Never emit shell commands, jq code, regexes, markdown, or prose.\n- Do not invent filenames, directories, output names, fields, page ranges, search text, or filter values.\n- Omit pipeline handoff fields instead of setting them to null.\n- Never use csv_to_json for a .json input.\n- Never use the output filename as an input filename.\n- Supported step kinds are: find_files, pdf_merge, pdf_extract_pages, pdf_search_text, csv_to_json, json_filter, json_select_fields, json_sort, json_group_count.\n- Use find_files with root, glob, and optional max_depth.\n- For \"under ./dir\" or \"in ./dir\", put that path in root.\n- For \"every PDF\", use glob=\"*.pdf\"; for CSV files, use glob=\"*.csv\"; for JSON files, use glob=\"*.json\".\n- For cues like \"signed pdfs\" or \"june csv\", combine the cue and extension in glob, such as \"*signed*.pdf\" or \"*june*.csv\".\n- For \"no deeper than two levels\", set max_depth to 2.\n- Use pdf_merge for combining PDFs.\n- Use pdf_extract_pages for extracting an inclusive page range from one PDF.\n- For \"extract page N\", set both page_start and page_end to N.\n- Use pdf_search_text for text search across one or more PDFs; its output must be JSON.\n- Use json_filter for one-field comparisons with operator eq, ne, gt, gte, lt, lte, or contains.\n- Use json_select_fields for keeping named fields.\n- Use json_sort for sorting by one field.\n- Use json_group_count for counting rows grouped by one or more fields.\n\nExamples:\nUser: extract pages from manual.pdf into manual_excerpt.pdf\nAssistant: {\"kind\":\"clarification\",\"question\":\"Which page range should I extract from manual.pdf?\"}\n\nUser: convert shipments.csv to shipments.json\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"csv_to_json\",\"input_file\":\"shipments.csv\",\"output_file\":\"shipments.json\"}]}\n\nUser: merge every PDF under ./contracts into signed_bundle.pdf\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"find_files\",\"root\":\"./contracts\",\"glob\":\"*.pdf\"},{\"kind\":\"pdf_merge\",\"output_file\":\"signed_bundle.pdf\"}]}\n\nUser: convert customers.csv to JSON and keep only name and email in contacts.json\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"csv_to_json\",\"input_file\":\"customers.csv\"},{\"kind\":\"json_select_fields\",\"fields\":[\"name\",\"email\"],\"output_file\":\"contacts.json\"}]}"
+        },
+        {
+          "role": "user",
+          "content": "extract pages 14 through 16 from compliance_manual.pdf into compliance_section.pdf"
+        }
+      ],
+      "expected_assistant": "{\"kind\":\"plan\",\"steps\":[{\"kind\":\"pdf_extract_pages\",\"input_file\":\"compliance_manual.pdf\",\"page_start\":14,\"page_end\":16,\"output_file\":\"compliance_section.pdf\"}]}",
+      "expected_normalized": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "pdf_extract_pages",
+            "input_file": "compliance_manual.pdf",
+            "page_start": 14,
+            "page_end": 16,
+            "output_file": "compliance_section.pdf"
+          }
+        ]
+      },
+      "actual_assistant": "{\"kind\":\"plan\",\"steps\":[{\"kind\":\"pdf_extract_pages\",\"input_file\":\"compliance_manual.pdf\",\"page_start\":14,\"page_end\":16,\"output_file\":\"compliance_section.pdf\"}]}",
+      "actual_normalized": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "pdf_extract_pages",
+            "input_file": "compliance_manual.pdf",
+            "page_start": 14,
+            "page_end": 16,
+            "output_file": "compliance_section.pdf"
+          }
+        ]
+      },
+      "exact_match": true,
+      "compile_valid": true,
+      "compile_error": null,
+      "parse_or_transport_error": null,
+      "output_kind": "plan"
+    },
+    {
+      "bucket": "pdf_merge",
+      "source_path": "/home/uphill/programming/py/oss-testing/data/samples/plans/pipelines.jsonl",
+      "source_line": 1,
+      "focus": "find pdf merge path cue",
+      "prompt": "merge every PDF under ./agreements with nda in the path into nda_packet.pdf",
+      "sent_messages": [
+        {
+          "role": "system",
+          "content": "You translate user requests into PlanV1 JSON for a small file/PDF/JSON shell assistant.\n\nRules:\n- Return valid JSON only. Return exactly one JSON object and nothing else.\n- Return either {\"kind\":\"plan\",\"steps\":[...]} or {\"kind\":\"clarification\",\"question\":\"...\"}.\n- If any required executable value is missing, return a clarification instead of a partial step.\n- Allowed plan shapes only:\n  1. one executable step\n  2. find_files first, then exactly one consuming step\n  3. csv_to_json first, then exactly one JSON step\n- Never use more than 2 steps.\n- Never add helper steps that the user did not ask for.\n- Every step object must include a \"kind\" field.\n- Never emit shell commands, jq code, regexes, markdown, or prose.\n- Do not invent filenames, directories, output names, fields, page ranges, search text, or filter values.\n- Omit pipeline handoff fields instead of setting them to null.\n- Never use csv_to_json for a .json input.\n- Never use the output filename as an input filename.\n- Supported step kinds are: find_files, pdf_merge, pdf_extract_pages, pdf_search_text, csv_to_json, json_filter, json_select_fields, json_sort, json_group_count.\n- Use find_files with root, glob, and optional max_depth.\n- For \"under ./dir\" or \"in ./dir\", put that path in root.\n- For \"every PDF\", use glob=\"*.pdf\"; for CSV files, use glob=\"*.csv\"; for JSON files, use glob=\"*.json\".\n- For cues like \"signed pdfs\" or \"june csv\", combine the cue and extension in glob, such as \"*signed*.pdf\" or \"*june*.csv\".\n- For \"no deeper than two levels\", set max_depth to 2.\n- Use pdf_merge for combining PDFs.\n- Use pdf_extract_pages for extracting an inclusive page range from one PDF.\n- For \"extract page N\", set both page_start and page_end to N.\n- Use pdf_search_text for text search across one or more PDFs; its output must be JSON.\n- Use json_filter for one-field comparisons with operator eq, ne, gt, gte, lt, lte, or contains.\n- Use json_select_fields for keeping named fields.\n- Use json_sort for sorting by one field.\n- Use json_group_count for counting rows grouped by one or more fields.\n\nExamples:\nUser: extract pages from manual.pdf into manual_excerpt.pdf\nAssistant: {\"kind\":\"clarification\",\"question\":\"Which page range should I extract from manual.pdf?\"}\n\nUser: convert shipments.csv to shipments.json\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"csv_to_json\",\"input_file\":\"shipments.csv\",\"output_file\":\"shipments.json\"}]}\n\nUser: merge every PDF under ./contracts into signed_bundle.pdf\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"find_files\",\"root\":\"./contracts\",\"glob\":\"*.pdf\"},{\"kind\":\"pdf_merge\",\"output_file\":\"signed_bundle.pdf\"}]}\n\nUser: convert customers.csv to JSON and keep only name and email in contacts.json\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"csv_to_json\",\"input_file\":\"customers.csv\"},{\"kind\":\"json_select_fields\",\"fields\":[\"name\",\"email\"],\"output_file\":\"contacts.json\"}]}"
+        },
+        {
+          "role": "user",
+          "content": "merge every PDF under ./agreements with nda in the path into nda_packet.pdf"
+        }
+      ],
+      "expected_assistant": "{\"kind\":\"plan\",\"steps\":[{\"kind\":\"find_files\",\"root\":\"./agreements\",\"glob\":\"*nda*.pdf\",\"max_depth\":null},{\"kind\":\"pdf_merge\",\"output_file\":\"nda_packet.pdf\"}]}",
+      "expected_normalized": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "find_files",
+            "root": "./agreements",
+            "glob": "*nda*.pdf"
+          },
+          {
+            "kind": "pdf_merge",
+            "output_file": "nda_packet.pdf"
+          }
+        ]
+      },
+      "actual_assistant": "{\"kind\":\"plan\",\"steps\":[{\"kind\":\"find_files\",\"root\":\"./agreements\",\"glob\":\"*nda*.pdf\"},{\"kind\":\"pdf_merge\",\"output_file\":\"nda_packet.pdf\"}]}",
+      "actual_normalized": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "find_files",
+            "root": "./agreements",
+            "glob": "*nda*.pdf"
+          },
+          {
+            "kind": "pdf_merge",
+            "output_file": "nda_packet.pdf"
+          }
+        ]
+      },
+      "exact_match": true,
+      "compile_valid": true,
+      "compile_error": null,
+      "parse_or_transport_error": null,
+      "output_kind": "plan"
+    },
+    {
+      "bucket": "pdf_search_text",
+      "source_path": "/home/uphill/programming/py/oss-testing/data/samples/plans/pdf_search_text.jsonl",
+      "source_line": 1,
+      "focus": "pdf search explicit file",
+      "prompt": "search handbook.pdf for warranty and write warranty_matches.json",
+      "sent_messages": [
+        {
+          "role": "system",
+          "content": "You translate user requests into PlanV1 JSON for a small file/PDF/JSON shell assistant.\n\nRules:\n- Return valid JSON only. Return exactly one JSON object and nothing else.\n- Return either {\"kind\":\"plan\",\"steps\":[...]} or {\"kind\":\"clarification\",\"question\":\"...\"}.\n- If any required executable value is missing, return a clarification instead of a partial step.\n- Allowed plan shapes only:\n  1. one executable step\n  2. find_files first, then exactly one consuming step\n  3. csv_to_json first, then exactly one JSON step\n- Never use more than 2 steps.\n- Never add helper steps that the user did not ask for.\n- Every step object must include a \"kind\" field.\n- Never emit shell commands, jq code, regexes, markdown, or prose.\n- Do not invent filenames, directories, output names, fields, page ranges, search text, or filter values.\n- Omit pipeline handoff fields instead of setting them to null.\n- Never use csv_to_json for a .json input.\n- Never use the output filename as an input filename.\n- Supported step kinds are: find_files, pdf_merge, pdf_extract_pages, pdf_search_text, csv_to_json, json_filter, json_select_fields, json_sort, json_group_count.\n- Use find_files with root, glob, and optional max_depth.\n- For \"under ./dir\" or \"in ./dir\", put that path in root.\n- For \"every PDF\", use glob=\"*.pdf\"; for CSV files, use glob=\"*.csv\"; for JSON files, use glob=\"*.json\".\n- For cues like \"signed pdfs\" or \"june csv\", combine the cue and extension in glob, such as \"*signed*.pdf\" or \"*june*.csv\".\n- For \"no deeper than two levels\", set max_depth to 2.\n- Use pdf_merge for combining PDFs.\n- Use pdf_extract_pages for extracting an inclusive page range from one PDF.\n- For \"extract page N\", set both page_start and page_end to N.\n- Use pdf_search_text for text search across one or more PDFs; its output must be JSON.\n- Use json_filter for one-field comparisons with operator eq, ne, gt, gte, lt, lte, or contains.\n- Use json_select_fields for keeping named fields.\n- Use json_sort for sorting by one field.\n- Use json_group_count for counting rows grouped by one or more fields.\n\nExamples:\nUser: extract pages from manual.pdf into manual_excerpt.pdf\nAssistant: {\"kind\":\"clarification\",\"question\":\"Which page range should I extract from manual.pdf?\"}\n\nUser: convert shipments.csv to shipments.json\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"csv_to_json\",\"input_file\":\"shipments.csv\",\"output_file\":\"shipments.json\"}]}\n\nUser: merge every PDF under ./contracts into signed_bundle.pdf\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"find_files\",\"root\":\"./contracts\",\"glob\":\"*.pdf\"},{\"kind\":\"pdf_merge\",\"output_file\":\"signed_bundle.pdf\"}]}\n\nUser: convert customers.csv to JSON and keep only name and email in contacts.json\nAssistant: {\"kind\":\"plan\",\"steps\":[{\"kind\":\"csv_to_json\",\"input_file\":\"customers.csv\"},{\"kind\":\"json_select_fields\",\"fields\":[\"name\",\"email\"],\"output_file\":\"contacts.json\"}]}"
+        },
+        {
+          "role": "user",
+          "content": "search handbook.pdf for warranty and write warranty_matches.json"
+        }
+      ],
+      "expected_assistant": "{\"kind\":\"plan\",\"steps\":[{\"kind\":\"pdf_search_text\",\"input_files\":[\"handbook.pdf\"],\"query\":\"warranty\",\"output_file\":\"warranty_matches.json\",\"context_chars\":160}]}",
+      "expected_normalized": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "pdf_search_text",
+            "input_files": [
+              "handbook.pdf"
+            ],
+            "query": "warranty",
+            "output_file": "warranty_matches.json",
+            "context_chars": 160
+          }
+        ]
+      },
+      "actual_assistant": "{\"kind\":\"plan\",\"steps\":[{\"kind\":\"pdf_search_text\",\"input_files\":[\"handbook.pdf\"],\"query\":\"warranty\",\"output_file\":\"warranty_matches.json\",\"context_chars\":160}]}",
+      "actual_normalized": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "pdf_search_text",
+            "input_files": [
+              "handbook.pdf"
+            ],
+            "query": "warranty",
+            "output_file": "warranty_matches.json",
+            "context_chars": 160
+          }
+        ]
+      },
+      "exact_match": true,
+      "compile_valid": true,
+      "compile_error": null,
+      "parse_or_transport_error": null,
+      "output_kind": "plan"
+    }
+  ]
+}

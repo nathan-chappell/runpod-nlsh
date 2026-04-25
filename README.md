@@ -1,41 +1,112 @@
 # nlsh
 
-`nlsh` is a local CLI that turns natural-language requests into a typed execution plan for a small, whitelisted set of file, PDF, CSV, and JSON workflows. The model plans; the compiler and runner stay deterministic.
+`nlsh` is an experiment in teaching a small language model to turn natural-language file tasks into a tiny workflow language and then into deterministic shell execution. Instead of letting the model emit arbitrary bash, the planner is constrained to a small action set and is expected to ask for clarification when the prompt is underspecified.
 
-## What Is In Here
+## Command Model
 
-- A typed schema for either a short execution plan or one clarifying question
-- A compiler that turns plans into safe bash scripts
-- A runner with clarification and confirmation gates
-- A shell runtime built on `find`, `qpdf`, and `jq`
-- Python helpers for CSV-to-JSON conversion and simple PDF text search
-- Coverage-organized message dataset for fine-tuning and eval
-- A starter Axolotl config for `microsoft/Phi-4-mini-instruct` LoRA
-- A pod eval image and manifest for sequential SGLang model comparisons plus a direct Phi-4 LoRA run
+The supported action vocabulary is intentionally narrow:
 
-## Supported Actions
+- `find_files` for file discovery by `root`, `glob`, and optional `max_depth`
+- `pdf_merge`, `pdf_extract_pages`, and `pdf_search_text` for PDF workflows
+- `csv_to_json` for CSV ingestion
+- `json_filter`, `json_select_fields`, `json_sort`, and `json_group_count` for JSON transforms
 
-- `find_files`
-- `pdf_merge`
-- `pdf_extract_pages`
-- `pdf_search_text`
-- `csv_to_json`
-- `json_filter`
-- `json_select_fields`
-- `json_sort`
-- `json_group_count`
-
-Planner output is one of two shapes:
+The planner never returns shell directly. Its final output is always one of two validated JSON shapes:
 
 ```json
-{"kind": "clarification", "question": "Which PDF files should I merge?"}
+{"kind":"clarification","question":"Which PDF files should I merge?"}
 ```
 
 ```json
-{"kind": "plan", "steps": [{"kind": "find_files", "root": "./contracts", "glob": "*.pdf", "max_depth": null}]}
+{"kind":"plan","steps":[{"kind":"find_files","root":"./contracts","glob":"*.pdf"}]}
 ```
 
-Plans allow up to three linear steps. `find_files` is optional, but when used it must be first. CSV analysis should flow through `csv_to_json` and then one JSON transform.
+`PlanV1` is also deliberately small:
+
+- a single executable step
+- `find_files` followed by exactly one consuming step
+- `csv_to_json` followed by exactly one JSON terminal step
+- omitted handoff fields in two-step plans instead of `null`
+
+So this is closer to semantic parsing than free-form shell generation: no arbitrary command chains, no three-step plans, and no partial executable plans. Valid plans compile into deterministic `find`, `qpdf`, `jq`, and Python helper invocations, and the runner previews and confirms them before execution.
+
+## End-To-End Flow
+
+The repo is organized around a full dataset-to-runtime loop:
+
+1. `data/samples/` stores canonical JSONL examples where each prompt maps to either a `PlanV1` response or a `Clarification`.
+2. `scripts/materialize_dataset_splits.py` builds the committed fair `train/eval/test` split tree under `data/splits/v1/`.
+3. `scripts/phi_4_training.py` fine-tunes `microsoft/Phi-4-mini-instruct` with LoRA on those structured examples.
+4. The Runpod image can either run the eval/fine-tune workflow or serve the bundled adapter behind an OpenAI-compatible SGLang endpoint.
+5. At runtime, `nlsh plan` or `nlsh run` sends a natural-language prompt to that endpoint, validates the returned JSON, compiles it into a shell script, previews it, and executes it locally after confirmation.
+
+## System Idea
+
+- `planner`: turns natural language into either `{"kind":"clarification"}` or `{"kind":"plan"}`
+- `schema`: defines the only legal actions and plan shapes
+- `compiler`: lowers valid plans into deterministic shell scripts
+- `runner`: previews, confirms, and executes compiled plans
+- `dataset`: teaches the planner when to execute and when to ask for clarification
+- `training`: fine-tunes Phi-4 with LoRA on those prompt/plan examples
+- `serving`: packages the fine-tuned adapter behind an OpenAI-compatible SGLang endpoint
+- `evaluation`: measures exact match, compile-valid, and slot accuracy on held-out prompts
+
+## Architecture
+
+At a high level, the stack looks like this:
+
+```text
+natural language
+  -> planner prompt
+  -> PlanV1 / Clarification JSON
+  -> schema validation
+  -> deterministic compiler
+  -> confirmation / tool checks
+  -> bash + helper scripts
+```
+
+## Latest Results
+
+The current headline result is that the fine-tuned Phi-4 model is substantially better on the fair held-out test split, but the gain is in exact task execution and slot filling, not compile-valid.
+
+Held-out test split size:
+
+- `25` examples
+
+Recent Runpod reruns on the same split:
+
+| Run | Baseline Exact | Fine-Tuned Exact | Baseline Compile | Fine-Tuned Compile | Baseline Slot | Fine-Tuned Slot |
+| --- | --- | --- | --- | --- | --- | --- |
+| `dbdyfefx5gmdgn-64410d30` | `0.48` | `0.92` | `1.0` | `1.0` | `0.396` | `0.905` |
+| `68oi72inl7zsj6-64411b67` | `0.48` | `0.88` | `1.0` | `1.0` | `0.396` | `0.898` |
+
+So the result is stable enough to summarize simply:
+
+- compile-valid is already saturated on the current test split
+- fine-tuning improves exact match by about `+0.40` to `+0.44`
+- fine-tuning improves slot accuracy by about `+0.50`
+
+That means the main problem is no longer “can the model emit legal plans?” It is “does it choose the correct action and fill the slots precisely?”
+
+Representative improvements:
+
+- `find every PDF under ./invoices no deeper than two levels`
+  baseline asked a clarification, fine-tuned emits the exact `find_files` plan
+- `from payments.json keep rows where amount is greater than or equal to 500 into large_payments.json`
+  baseline over-clarified, fine-tuned emits the exact `json_filter` plan
+- `extract page 1 from cover_letter.pdf into cover_letter_page1.pdf`
+  baseline still asked for confirmation of the page range, fine-tuned executes directly
+- `search handbook.pdf for warranty and write warranty_matches.json`
+  baseline over-clarified, fine-tuned emits the exact `pdf_search_text` plan
+
+The main regression to watch is still:
+
+- `merge the PDFs into packet.pdf`
+  baseline correctly asks which PDFs to merge, while the fine-tuned model can hallucinate input filenames
+
+So the current dataset work is focused on preserving the new confidence on fully specified prompts without teaching the model to invent missing inputs on underspecified ones.
+
+There is now also a live served check against the Runpod-hosted fine-tuned model from April 25, 2026: the endpoint responded successfully to `/model_info`, `/v1/models`, and `/v1/chat/completions`; a 10-sample live probe reached `8/10` exact match with `10/10` compile-valid outputs; and an end-to-end playground run executed `8/8` real prompts successfully across CSV, JSON, PDF, and file-discovery tasks. The brief write-up and saved artifacts are in [docs/live-served-demo-2026-04-25.md](docs/live-served-demo-2026-04-25.md).
 
 ## Setup
 
@@ -67,31 +138,16 @@ export NLSH_MODEL=microsoft/Phi-4-mini-instruct
 
 ## CLI
 
-Plan a request:
+The main commands are:
 
 ```bash
 ./.venv/bin/nlsh plan "merge every PDF under ./contracts into contracts.pdf"
-```
-
-Run a request with confirmation:
-
-```bash
-./.venv/bin/nlsh run "convert orders.csv to JSON and keep rows where status is paid in paid_orders.json"
-```
-
-Compile a saved plan:
-
-```bash
+./.venv/bin/nlsh run "convert orders.csv to JSON in orders.json"
 ./.venv/bin/nlsh compile plan.json
-```
-
-Evaluate against the seed dataset:
-
-```bash
 ./.venv/bin/nlsh eval --planner gold
 ```
 
-Compare a live OpenAI-compatible endpoint against random canonical dataset samples:
+For live model checks:
 
 ```bash
 export NLSH_BASE_URL=https://your-endpoint.example/v1
@@ -100,11 +156,19 @@ export NLSH_API_KEY=...
 ./.venv/bin/nlsh probe-live --count 5 --seed 20260424
 ```
 
-`probe-live` now defaults to the same planner-style prompt shape that `nlsh plan/run` uses. If you want to replay the raw dataset `messages[:-1]` instead, add `--mode replay-messages`.
+`probe-live` uses the same runtime planner prompt shape as `nlsh plan/run` by default. The repo-local `runpod-live-test` skill adds two higher-level checks:
+
+- `probe-dataset`: a saved 10-sample stratified probe
+- `interactive-demo`: a disposable sandbox that asks the live model for a plan, confirms it, and executes it against real temp files
 
 ## Pod Eval And Fine-Tuning
 
-The pod eval and fine-tuning flow builds on Runpod's PyTorch base image and installs the project plus the full Python dependency stack during `docker build`. Pod startup stays lightweight: it prepares `/workspace`, starts Runpod base services through `/start.sh` when available, and then hands off to the workflow. Mutable state such as Hugging Face cache, downloaded models, checkpoints, and eval artifacts lives on `/workspace`; Python packages do not.
+There are two Runpod modes:
+
+1. `workflow`: baseline eval -> fine-tune -> post-train eval
+2. `serve`: expose the bundled fine-tuned Phi-4 adapter over an OpenAI-compatible endpoint
+
+Build and publish the image with:
 
 ```bash
 docker build -f Dockerfile.pod-eval \
@@ -114,93 +178,50 @@ docker push YOUR_DOCKERHUB_USER/runpod-nlsh:0.4.0
 docker push YOUR_DOCKERHUB_USER/runpod-nlsh:latest
 ```
 
-The default base is `runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404`. To try another Runpod base, pass `--build-arg RUNPOD_BASE_IMAGE=...`.
-`requirements/pod-sglang.txt` pins `sglang==0.5.10.post1` and `sglang-kernel==0.4.1` so the image stays aligned with the base layer's Torch 2.9.1 and can reuse the PyTorch already bundled in the Runpod image. `requirements/pod-train.txt` matches that runtime by pinning `transformers==5.3.0`, and the training script uses native Transformers classes for Phi-4 by default instead of the Hub-hosted remote model code.
-
-Create a Runpod pod with:
-
-- GPU: RTX 4090 or another 32 GB+ GPU
-- Image: `YOUR_DOCKERHUB_USER/runpod-nlsh:0.4.0`
-- Persistent or network volume mounted at `/workspace`
-- `HF_TOKEN` set from a Runpod secret
-- Recommended volume size: at least 100 GB
-- Container disk: use 20 GB for the Runpod PyTorch base image. The model, SGLang, tmp, and cache data still live on `/workspace`, but the base image itself is large enough that 10 GB is likely too tight if Runpod counts image/root filesystem unpacking there.
-
-The container `CMD` is `["python", "scripts/runpod_bootstrap.py"]`. Heavy Python dependencies are baked into the image from `requirements/pod-core.txt`, `requirements/pod-train.txt`, and `requirements/pod-sglang.txt`, and `nlsh` itself is installed into the image Python during the build. The bootstrap stays stdlib-only, creates cache and artifact directories under `/workspace`, starts Runpod base services by default, and then dispatches by `RUNPOD_BOOT_MODE`. `serve` is now the default and launches SGLang with the bundled Phi-4 LoRA adapter; `workflow` runs `python -m nlsh.pod_workflow run` for the baseline-eval -> fine-tune -> post-train-eval sequence. Normal pod startup should not need any runtime `pip install`, and `/workspace` should only hold models, caches, checkpoints, and artifacts.
-
-The Typer workflow logs the resolved configuration and execution plan, then:
-
-1. validates `HF_TOKEN` and enters `/opt/nlsh`
-2. starts all manifest model downloads in parallel
-3. evaluates models in priority order as each preferred model is ready: Phi-4, SmolLM3, then Qwen3
-4. fine-tunes Phi-4-mini with `scripts/phi_4_training.py`
-5. serves the trained adapter with SGLang LoRA support and re-evaluates the fine-tuned Phi-4 adapter
-
-For serious runs, the workflow now defaults to committed `train/eval/test` splits under `data/splits/v1/`: baseline eval and post-training eval use `data/splits/v1/test`, while training uses `data/splits/v1/train` plus `data/splits/v1/eval`. The canonical source dataset remains `data/samples/`.
-
-Baseline evals and training now keep incremental state on disk so a failure does not erase the run history. The workflow writes `/workspace/nlsh-artifacts/workflow_state.json`; each model eval writes `run_state.json`, `report.json`, and `eval.log`; OOM retries preserve prior attempt artifacts as `*.attempt-N.*`; and training writes `training_state.json`, `trainer_state.json`, `metrics_history.json`, `metrics_history.csv`, and regular checkpoints under the output directory. Reports go to `/workspace/nlsh-artifacts`, the adapter goes to `/workspace/nlsh-finetune/phi-4-mini-instruct-lora`, and exit codes are recorded in `/workspace/nlsh-artifacts/last_eval_exit_code`, `/workspace/nlsh-artifacts/last_training_exit_code`, `/workspace/nlsh-artifacts/last_post_training_eval_exit_code`, and `/workspace/nlsh-artifacts/last_exit_code`. In workflow mode the bootstrap still defaults `POD_EVAL_EXIT_AFTER=1`, so a serious eval/train/eval run finishes once and exits cleanly. Set `POD_EVAL_EXIT_AFTER=0` if you want the container to stay alive for inspection and artifact exfiltration.
-
-The Runpod PyTorch base image may include `/start.sh` for base-image services such as SSH or notebook processes. Runpod's custom-template docs describe this as the base-service startup path, so the bootstrap runs it by default when it exists. Set `RUNPOD_START_BASE_SERVICES=0` only if you want application-only startup.
-
-Optional runtime knobs:
+Practical pod setup:
 
 ```bash
 RUNPOD_BOOT_MODE=serve
 RUNPOD_SERVE_HOST=0.0.0.0
 RUNPOD_SERVE_PORT=8000
 RUNPOD_SERVE_API_KEY=replace-with-a-random-64-char-hex-token
-POD_EVAL_LIMIT=2
-POD_EVAL_TIMEOUT=90
-POD_EVAL_STARTUP_TIMEOUT=900
-POD_EVAL_DOWNLOAD_WORKERS=3
-POD_EVAL_SELECTED_MODELS=microsoft/Phi-4-mini-instruct
-POD_EVAL_EVAL_ARGS="--oom-retries 3"
-RUNPOD_START_BASE_SERVICES=0
-POD_EVAL_RUN_BASELINE_EVAL=1
-POD_EVAL_RUN_TRAINING=1
-POD_EVAL_TRAIN_MODEL_ID=microsoft/Phi-4-mini-instruct
-POD_EVAL_TRAIN_OUTPUT_DIR=/workspace/nlsh-finetune/phi-4-mini-instruct-lora
-POD_EVAL_TRAIN_ARGS="--oom-retries 3"
-POD_EVAL_EXIT_AFTER=1
 ```
 
-To bundle the latest exfiltrated adapter into the next image build:
+If you want `workflow` mode instead of serving, also set `HF_TOKEN` and switch `RUNPOD_BOOT_MODE=workflow`.
+
+What the image does:
+
+- bootstraps from `scripts/runpod_bootstrap.py`
+- prepares `/workspace` caches and artifact dirs
+- defaults to `serve` mode
+- serves `microsoft/Phi-4-mini-instruct:nlsh-phi4-ft` on port `8000`
+
+Public access:
+
+- expose HTTP port `8000`
+- set `RUNPOD_SERVE_API_KEY` if you want bearer-token protection
+- without that token, the endpoint is public once the port is exposed
+
+Bundling the latest adapter into the next image:
 
 ```bash
 python scripts/stage_serving_adapter.py \
   --bundle-root tmp/runpod-downloads/2026-04-24/68oi72inl7zsj6-64411b67
 ```
 
-The staging script copies the current LoRA adapter into `deploy/bundled-adapter/current/` and writes `bundled_adapter_manifest.json` for the serving bootstrap. The copied weight files stay git-ignored, but Docker will include them in the build context.
+Known hardware/runtime caveat:
 
-Serve mode uses that bundled adapter and exposes the request model as `microsoft/Phi-4-mini-instruct:nlsh-phi4-ft`. The public Runpod endpoint is the SGLang OpenAI-compatible API plus native SGLang health/info routes. Set `RUNPOD_SERVE_API_KEY` in the pod environment to require `Authorization: Bearer ...` on client requests. When Runpod provides `RUNPOD_POD_ID`, the bootstrap logs the proxy URL as `https://<pod-id>-8000.proxy.runpod.net` and the OpenAI base as `.../v1`.
+- the image is currently based on `runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404`
+- that setup worked on RTX `5090` pods
+- we hit startup failures on at least one RTX `4090` pod before the app even booted, with `nvidia-container-cli` reporting `cuda>=12.8`
+- that points to a host-driver / Runpod-base-image compatibility issue rather than an app bug
+- so for now, `5090` is the known-good path with the current image; if `4090` support matters, the likely fix is choosing a different Runpod base image / CUDA line
 
-You can also run commands manually in the pod:
-
-```bash
-export HF_HOME=/workspace/hf-cache
-python scripts/pod_eval.py download-models
-python scripts/pod_eval.py run-suite --dataset data/splits/v1/test
-python scripts/pod_eval.py serve-lora --dry-run
-python -m nlsh.pod_workflow run --dry-run
-```
-
-To reach the service from outside Runpod, add `8000` to `Expose HTTP Ports`. Global networking alone is only for pod-to-pod traffic, not public access. A simple smoke test looks like:
+A quick external smoke test:
 
 ```bash
 curl -H "Authorization: Bearer $RUNPOD_SERVE_API_KEY" \
   https://<pod-id>-8000.proxy.runpod.net/v1/models
-```
-
-The manifest is `configs/pod_eval_models.json`. It currently evaluates `microsoft/Phi-4-mini-instruct`, `HuggingFaceTB/SmolLM3-3B`, and `Qwen/Qwen3-8B` through SGLang with conservative single-GPU settings. The default `sglang_args` disable CUDA graph capture and force Triton attention plus PyTorch sampling, which is a safer starting point on Runpod Blackwell/RTX 5090 pods using the CUDA 12.8 base image. Downloads run in parallel; eval stays sequential in the preferred order so one GPU is used predictably. The workflow now defaults `POD_EVAL_SELECTED_MODELS` to Phi-4 only, which keeps serious training runs focused on the main model unless you explicitly broaden the batch. If an SGLang startup or serve attempt fails with an OOM, `scripts/pod_eval.py` retries with smaller `max_running_requests`, then shorter `context_length`, then lower `mem_fraction_static` until it hits the configured floor. If training hits an OOM, `scripts/phi_4_training.py` retries with smaller batch sizes, then shorter sequence length, resuming from the latest checkpoint when one exists.
-
-Set `POD_EVAL_SELECTED_MODELS` to a comma-separated subset when you want to rerun a different batch, for example `POD_EVAL_SELECTED_MODELS=microsoft/Phi-4-mini-instruct,HuggingFaceTB/SmolLM3-3B`.
-
-For local non-GPU checks, validate the manifest and exercise the eval path with the gold planner:
-
-```bash
-./.venv/bin/python scripts/pod_eval.py download-models --dry-run
-./.venv/bin/python scripts/pod_eval.py run-model --planner gold --model microsoft/Phi-4-mini-instruct --limit 2
 ```
 
 ## Dataset And Training
@@ -209,15 +230,27 @@ The canonical, coverage-organized examples live in `data/samples/`; see `data/in
 
 The April 24, 2026 Runpod fine-tune findings and the follow-up dataset plan are captured in `docs/runpod-results-2026-04-24.md`.
 
-Each row includes:
+The dataset is trying to teach one specific boundary over and over:
 
-- `focus`
-- `prompt`
-- `tags`
-- `messages`
-- `plan`
+- execute when the prompt already contains enough information
+- ask for clarification when required inputs are actually missing
 
-For a direct single-GPU Phi-4-mini LoRA run outside the pod image on a 32 GB+ Runpod GPU, install the training extras and run the training script directly:
+That is why the examples are organized by action family and why many rows come in contrastive pairs such as:
+
+- underspecified merge -> clarification
+- fully specified merge -> plan
+- underspecified page extraction -> clarification
+- explicit page range -> plan
+- vague search request -> clarification
+- explicit query + file(s) -> plan
+
+The current fair split is:
+
+- `78` train
+- `25` eval
+- `25` test
+
+Training in one command:
 
 ```bash
 pip install -e ".[dev,train]"
@@ -225,30 +258,36 @@ python scripts/phi_4_training.py \
   --output-dir /workspace/nlsh-finetune/phi-4-mini-instruct-lora
 ```
 
-By default the standalone training script still deterministically partitions `data/samples/` into train/eval records. The Runpod workflow now prefers the committed `data/splits/v1/train`, `data/splits/v1/eval`, and `data/splits/v1/test` tree so post-training evaluation stays held out from the training examples. The current split is `78` train, `25` eval, and `25` test. Regenerate those splits after editing the canonical data:
+Current default training shape:
+
+- Phi-4 mini LoRA
+- native `transformers` classes, no remote-code dependency
+- `10` epochs
+- batch size `4`
+- grad accumulation `4`
+- learning rate `5e-4`
+- OOM retries that back off batch size and sequence length
+
+Regenerate the committed fair splits after editing `data/samples`:
 
 ```bash
 ./.venv/bin/python scripts/materialize_dataset_splits.py
 ```
 
-The script uses regular bf16 LoRA by default, maps dataset `developer` messages to chat `system` messages, trains on prompt/completion examples, and starts with `target_modules=["qkv_proj"]`, `r=8`, `lora_alpha=16`, and `lora_dropout=0.05`. The default training schedule is now more serious: `10` epochs, `per_device_train_batch_size=4`, `per_device_eval_batch_size=4`, `gradient_accumulation_steps=4`, and `learning_rate=5e-4`, with OOM retries reducing batch sizes and sequence length if the GPU cannot hold that footprint. It defaults to `--no-trust-remote-code` for Phi-4 so it can use the native `transformers` `Phi3*` classes and avoid upstream remote-code drift. It tries FlashAttention 2 when installed and otherwise falls back to SDPA. Checkpoints go under `--output-dir/checkpoint-*`; the final PEFT adapter is saved directly in `--output-dir`. Training also emits normalized `metrics_history.json` and `metrics_history.csv`, while the exfil skill renders `training-metrics.svg` from those artifacts.
+Run artifacts now include enough to compare experiments later:
 
-The next pod startup uses this script directly, not Axolotl. Set `POD_EVAL_RUN_TRAINING=0` if you only want baseline evals, or set `POD_EVAL_TRAIN_ARGS` to pass extra arguments such as `--max-steps 100` for a short smoke run.
-
-If the adapter underfits, widen LoRA gradually:
-
-```bash
-python scripts/phi_4_training.py --target-modules qkv_proj,o_proj
-python scripts/phi_4_training.py --target-modules qkv_proj,o_proj,gate_up_proj,down_proj
-```
-
-The Axolotl starter config is at `configs/axolotl/phi-4-mini-instruct-lora.yaml`. It mirrors the conservative qkv-only LoRA defaults and is meant for a demo LoRA run after the prompting and eval examples feel stable.
+- baseline vs fine-tuned eval summaries
+- checkpoints and adapter files
+- `metrics_history.json`
+- `metrics_history.csv`
+- `training-metrics.svg`
+- exfil reports with representative improvements and regressions
 
 ## Notes
 
 - The compiler refuses to overwrite outputs unless `NLSH_ALLOW_OVERWRITE=1`.
 - `pdf_merge` and `pdf_extract_pages` compile to `qpdf`.
-- `pdf_search_text` uses `pypdf` and writes JSON matches with `file`, `page`, `query`, and `text_excerpt`.
 - JSON transforms compile to `jq`.
-- CSV transforms first convert to JSON with `python -m nlsh.csv_to_json`.
+- CSV transforms use `python -m nlsh.csv_to_json`.
+- `pdf_search_text` uses `pypdf`.
 - `nlsh run` checks for missing system tools before asking for execution confirmation.

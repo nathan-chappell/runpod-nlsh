@@ -1,0 +1,207 @@
+{
+  "workspace": "/home/uphill/programming/py/oss-testing/tmp/playground-workspace",
+  "executed_ok": 8,
+  "clarifications": 0,
+  "other_failures": 0,
+  "results": [
+    {
+      "name": "csv_to_json",
+      "prompt": "convert orders.csv to JSON in orders.json",
+      "normalized_output": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "csv_to_json",
+            "input_file": "orders.csv",
+            "output_file": "orders.json"
+          }
+        ]
+      },
+      "compiled_script": "set -euo pipefail\nif [ -e orders.json ] && [ \"${NLSH_ALLOW_OVERWRITE:-0}\" != \"1\" ]; then\n  echo \"Refusing to overwrite existing file: orders.json\" >&2\n  exit 1\nfi\n/home/uphill/programming/py/oss-testing/.venv/bin/python -m nlsh.csv_to_json orders.csv > orders.json\n",
+      "status": "executed",
+      "exit_code": 0,
+      "changed_files": [
+        "orders.json"
+      ],
+      "output_previews": {
+        "orders.json": "[\n  {\n    \"order_id\": \"1001\",\n    \"status\": \"paid\",\n    \"total\": \"19.95\"\n  },\n  {\n    \"order_id\": \"1002\",\n    \"status\": \"pending\",\n    \"total\": \"42.00\"\n  },\n  {\n    \"order_id\": \"1003\",\n    \"status\": \"paid\",\n    \"total\": \"10.50\"\n  }\n]\n"
+      }
+    },
+    {
+      "name": "json_filter",
+      "prompt": "from users.json keep rows where role is not guest into member_users.json",
+      "normalized_output": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "json_filter",
+            "input_file": "users.json",
+            "field": "role",
+            "operator": "ne",
+            "value": "guest",
+            "output_file": "member_users.json"
+          }
+        ]
+      },
+      "compiled_script": "set -euo pipefail\nif [ -e member_users.json ] && [ \"${NLSH_ALLOW_OVERWRITE:-0}\" != \"1\" ]; then\n  echo \"Refusing to overwrite existing file: member_users.json\" >&2\n  exit 1\nfi\njq --arg field role --argjson value '\"guest\"' 'map(select(.[$field] != $value))' users.json > member_users.json\n",
+      "status": "executed",
+      "exit_code": 0,
+      "changed_files": [
+        "member_users.json"
+      ],
+      "output_previews": {
+        "member_users.json": "[\n  {\n    \"user_id\": 1,\n    \"role\": \"admin\",\n    \"email\": \"alice@example.com\"\n  },\n  {\n    \"user_id\": 3,\n    \"role\": \"member\",\n    \"email\": \"cora@example.com\"\n  }\n]\n"
+      }
+    },
+    {
+      "name": "json_select_fields",
+      "prompt": "from tickets.json keep only ticket_id priority and owner into ticket_queue.json",
+      "normalized_output": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "json_select_fields",
+            "input_file": "tickets.json",
+            "fields": [
+              "ticket_id",
+              "priority",
+              "owner"
+            ],
+            "output_file": "ticket_queue.json"
+          }
+        ]
+      },
+      "compiled_script": "set -euo pipefail\nif [ -e ticket_queue.json ] && [ \"${NLSH_ALLOW_OVERWRITE:-0}\" != \"1\" ]; then\n  echo \"Refusing to overwrite existing file: ticket_queue.json\" >&2\n  exit 1\nfi\njq --argjson fields '[\"ticket_id\", \"priority\", \"owner\"]' 'map(. as $row | reduce $fields[] as $field ({}; . + {($field): $row[$field]}))' tickets.json > ticket_queue.json\n",
+      "status": "executed",
+      "exit_code": 0,
+      "changed_files": [
+        "ticket_queue.json"
+      ],
+      "output_previews": {
+        "ticket_queue.json": "[\n  {\n    \"ticket_id\": \"T-100\",\n    \"priority\": \"high\",\n    \"owner\": \"alice\"\n  },\n  {\n    \"ticket_id\": \"T-101\",\n    \"priority\": \"medium\",\n    \"owner\": \"bob\"\n  }\n]\n"
+      }
+    },
+    {
+      "name": "json_sort",
+      "prompt": "sort invoices.json by total descending into invoices_sorted.json",
+      "normalized_output": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "json_sort",
+            "input_file": "invoices.json",
+            "field": "total",
+            "descending": true,
+            "output_file": "invoices_sorted.json"
+          }
+        ]
+      },
+      "compiled_script": "set -euo pipefail\nif [ -e invoices_sorted.json ] && [ \"${NLSH_ALLOW_OVERWRITE:-0}\" != \"1\" ]; then\n  echo \"Refusing to overwrite existing file: invoices_sorted.json\" >&2\n  exit 1\nfi\njq --arg field total 'sort_by(.[$field]) | reverse' invoices.json > invoices_sorted.json\n",
+      "status": "executed",
+      "exit_code": 0,
+      "changed_files": [
+        "invoices_sorted.json"
+      ],
+      "output_previews": {
+        "invoices_sorted.json": "[\n  {\n    \"invoice_id\": \"INV-2\",\n    \"total\": 99.5\n  },\n  {\n    \"invoice_id\": \"INV-3\",\n    \"total\": 48.2\n  },\n  {\n    \"invoice_id\": \"INV-1\",\n    \"total\": 15\n  }\n]\n"
+      }
+    },
+    {
+      "name": "json_group_count",
+      "prompt": "count incidents.json rows per severity into incidents_by_severity.json",
+      "normalized_output": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "json_group_count",
+            "input_file": "incidents.json",
+            "group_by": [
+              "severity"
+            ],
+            "output_file": "incidents_by_severity.json",
+            "count_field": "count"
+          }
+        ]
+      },
+      "compiled_script": "set -euo pipefail\nif [ -e incidents_by_severity.json ] && [ \"${NLSH_ALLOW_OVERWRITE:-0}\" != \"1\" ]; then\n  echo \"Refusing to overwrite existing file: incidents_by_severity.json\" >&2\n  exit 1\nfi\njq --argjson fields '[\"severity\"]' --arg count_field count 'group_by([.[$fields[]]]) | map(.[0] as $first | (reduce $fields[] as $field ({}; . + {($field): $first[$field]})) + {($count_field): length})' incidents.json > incidents_by_severity.json\n",
+      "status": "executed",
+      "exit_code": 0,
+      "changed_files": [
+        "incidents_by_severity.json"
+      ],
+      "output_previews": {
+        "incidents_by_severity.json": "[\n  {\n    \"severity\": \"high\",\n    \"count\": 2\n  },\n  {\n    \"severity\": \"low\",\n    \"count\": 1\n  }\n]\n"
+      }
+    },
+    {
+      "name": "pdf_merge",
+      "prompt": "merge contract_a.pdf and contract_b.pdf into contract_packet.pdf",
+      "normalized_output": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "pdf_merge",
+            "input_files": [
+              "contract_a.pdf",
+              "contract_b.pdf"
+            ],
+            "output_file": "contract_packet.pdf"
+          }
+        ]
+      },
+      "compiled_script": "set -euo pipefail\nif [ -e contract_packet.pdf ] && [ \"${NLSH_ALLOW_OVERWRITE:-0}\" != \"1\" ]; then\n  echo \"Refusing to overwrite existing file: contract_packet.pdf\" >&2\n  exit 1\nfi\nqpdf --empty --pages contract_a.pdf contract_b.pdf -- contract_packet.pdf\n",
+      "status": "executed",
+      "exit_code": 0,
+      "changed_files": [
+        "contract_packet.pdf"
+      ],
+      "output_previews": {
+        "contract_packet.pdf": "contract_packet.pdf (555 bytes)"
+      }
+    },
+    {
+      "name": "pdf_extract_pages",
+      "prompt": "extract pages 2 through 3 from handbook.pdf into handbook_excerpt.pdf",
+      "normalized_output": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "pdf_extract_pages",
+            "input_file": "handbook.pdf",
+            "page_start": 2,
+            "page_end": 3,
+            "output_file": "handbook_excerpt.pdf"
+          }
+        ]
+      },
+      "compiled_script": "set -euo pipefail\nif [ -e handbook_excerpt.pdf ] && [ \"${NLSH_ALLOW_OVERWRITE:-0}\" != \"1\" ]; then\n  echo \"Refusing to overwrite existing file: handbook_excerpt.pdf\" >&2\n  exit 1\nfi\nqpdf handbook.pdf --pages . 2-3 -- handbook_excerpt.pdf\n",
+      "status": "executed",
+      "exit_code": 0,
+      "changed_files": [
+        "handbook_excerpt.pdf"
+      ],
+      "output_previews": {
+        "handbook_excerpt.pdf": "handbook_excerpt.pdf (626 bytes)"
+      }
+    },
+    {
+      "name": "find_files",
+      "prompt": "find every PDF under ./contracts with executed in the path",
+      "normalized_output": {
+        "kind": "plan",
+        "steps": [
+          {
+            "kind": "find_files",
+            "root": "./contracts",
+            "glob": "*executed*.pdf",
+            "max_depth": 2
+          }
+        ]
+      },
+      "compiled_script": "set -euo pipefail\nmapfile -d '' -t MATCHES < <(find ./contracts -maxdepth 2 -type f -path './contracts/*executed*.pdf' -print0 | sort -z)\nif [ \"${#MATCHES[@]}\" -eq 0 ]; then\n  echo \"No matching files found.\" >&2\n  exit 1\nfi\nprintf \"%s\\n\" \"${MATCHES[@]}\"\n",
+      "status": "executed",
+      "exit_code": 0,
+      "changed_files": []
+    }
+  ]
+}

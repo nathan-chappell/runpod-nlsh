@@ -1,0 +1,12 @@
+[
+  {
+    "ticket_id": "T-100",
+    "priority": "high",
+    "owner": "alice"
+  },
+  {
+    "ticket_id": "T-101",
+    "priority": "medium",
+    "owner": "bob"
+  }
+]

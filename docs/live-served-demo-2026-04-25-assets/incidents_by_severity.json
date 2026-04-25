@@ -1,0 +1,10 @@
+[
+  {
+    "severity": "high",
+    "count": 2
+  },
+  {
+    "severity": "low",
+    "count": 1
+  }
+]

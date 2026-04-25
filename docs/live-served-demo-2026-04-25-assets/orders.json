@@ -1,0 +1,17 @@
+[
+  {
+    "order_id": "1001",
+    "status": "paid",
+    "total": "19.95"
+  },
+  {
+    "order_id": "1002",
+    "status": "pending",
+    "total": "42.00"
+  },
+  {
+    "order_id": "1003",
+    "status": "paid",
+    "total": "10.50"
+  }
+]

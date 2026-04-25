@@ -42,6 +42,17 @@ class PlannerConfig:
         )
 
 
+def _browser_like_headers() -> dict[str, str]:
+    return {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/136.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json",
+    }
+
+
 def planner_chat_messages(
     prompt: str,
     *,
@@ -81,6 +92,7 @@ def chat_completion_text(
         api_key=resolved_config.api_key or "EMPTY",
         timeout=resolved_config.request_timeout,
         max_retries=0,
+        default_headers=_browser_like_headers(),
     )
     request_kwargs: dict[str, Any] = {
         "model": model or resolved_config.model,
@@ -242,6 +254,7 @@ class OpenAIPlanner:
             api_key=self.config.api_key,
             timeout=self.config.request_timeout,
             max_retries=0,
+            default_headers=_browser_like_headers(),
         )
         response = client.chat.completions.create(
             **self._request_kwargs(
